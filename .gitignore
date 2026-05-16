@@ -1,0 +1,9 @@
+/venv
+/__pycache__
+z_helping functions.py
+text.txt
+/youtube_service/__pycache__
+/spotify_service/__pycache__
+/Platform/__pycache__
+/dictation/__pycache__
+/web_scraping/__pycache__
