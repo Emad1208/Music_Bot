@@ -171,12 +171,26 @@ load_json_dictionary(json_path)
 # =====================================
 # test
 # =====================================
+async def only_removing(text):
+    loop = asyncio.get_running_loop()
+    normalized = await loop.run_in_executor(
+        None,
+        normalize_text,
+        text
+    )
+    cleaned = await loop.run_in_executor(
+        None,
+        remove_stop_words,
+        normalized
+    )
+    return cleaned
+
 
 async def dictation(text):
 
     result = await process_query(text)
 
-    print(result)
+    # print(result)
 
     return result
 
