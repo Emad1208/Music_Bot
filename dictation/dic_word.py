@@ -1,7 +1,7 @@
 import re
 import json
 import asyncio
-
+from rapidfuzz import fuzz
 from pathlib import Path
 
 from hazm import Normalizer
@@ -19,8 +19,11 @@ STOP_WORDS = {
     "آهنگ",
     "موزیک",
     "ترانه",
+    "دانلود",
     "song",
-    "music"
+    "music",
+    "download",
+    "Download"
 }
 
 normalizer = Normalizer()
@@ -167,6 +170,41 @@ json_path = BASE_DIR / "fa_word_count.json"
 
 load_json_dictionary(json_path)
 
+# =====================================
+# Finding similar name 
+# =====================================
+
+async def find_similar_songs(user_input: str, song_dict: dict, similarity_threshold: int = 70) -> list[dict]:
+    """
+    Compares user input with song names in a dictionary and returns songs
+    that meet the similarity threshold, along with their page URLs.
+    
+    Args:
+        user_input: The song name/query provided by the user.
+        song_dict: A dictionary where keys are song names and values are their URLs.
+        similarity_threshold: The minimum similarity percentage (0-100) to consider a match.
+        
+    Returns:
+        A list of dictionaries, where each dictionary contains 'name', 'url', and 'similarity'
+        for songs that match the threshold.
+    """
+    matche_link = []
+    user_input_lower = user_input.lower()
+    
+    for song_name, song_url in song_dict.items():
+        song_name_lower = song_name.lower()
+        # محاسبه شباهت با استفاده از RapidFuzz
+        similarity = fuzz.ratio(user_input_lower, song_name_lower)
+        
+        if similarity >= similarity_threshold:
+            matche_link.append(song_name)
+            matche_link.append(song_url)
+            # matche_link.append(similarity)
+            
+    # مرتب‌سازی نتایج بر اساس بیشترین شباهت (از بالا به پایین)
+    # matche_link.sort(key=lambda x: x['similarity'], reverse=True)
+    
+    return matche_link
 
 # =====================================
 # test
@@ -194,5 +232,9 @@ async def dictation(text):
 
     return result
 
-if __name__ == "__main__":
-    asyncio.run(dictation())
+# mydic = {'دانلود آهنگ مجید رضوی تولد': 'https://upmusics.com/مجید-رضوی-تولد/', 'دانلود آهنگ جانا جهانا قلبم ضربانا امید ساربانی آهوی فراری': 'https://upmusics.com/جانا-جهانا-قلبم-ضربانا-امی/', 'دانلود اهنگ جز وصل تو دل به هرچه بستم توبه از علیرضا قربانی': 'https://upmusics.com/جز-وصل-تو-دل-به-هرچه-بستم-تو/', 'دانلود اهنگ من هوای ابریم جانا تو باران منی فاضل دریس اصلی و ریمیکس': 'https://upmusics.com/من-هوای-ابریم-جانا-تو-باران/', 'دانلود آهنگ من مواظبت میشم تو گل منی باغبونت منم رضا مریدی': 'https://upmusics.com/من-مواظبت-میشم-تو-گل-منی-باغ/'}
+# res = asyncio.run(find_similar_songs('مجید رضوی تولد',mydic))
+# print(res)
+
+# if __name__ == "__main__":
+#     asyncio.run(dictation())
