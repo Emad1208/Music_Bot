@@ -1,7 +1,11 @@
 import httpx
+import asyncio
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 import re
+
+
+
 
 STOP_WORDS = {
     "اهنگ",
@@ -15,9 +19,10 @@ STOP_WORDS = {
     "Download"
 }
 
-def search_song(text):
+async def search_song(text, client, scrape_semaphore):
     url = f'https://upmusics.com/search/{quote(text)}'
-    r = httpx.get(url)
+    async with scrape_semaphore:
+        r = await client.get(url)
     print(r.status_code)
 
     bs = BeautifulSoup(r.text, 'html.parser')
@@ -50,10 +55,11 @@ def search_song(text):
 
 
 
-def find_song(link):
+async def find_song(link, client, scrape_semaphore):
     try:
         url = link
-        r = httpx.get(url)
+        async with scrape_semaphore:
+            r = await client.get(url)
         bs = BeautifulSoup(r.text,'html.parser')
         try:
             music_one = {}
@@ -65,7 +71,7 @@ def find_song(link):
             music_name = remove_stop_words(music_name)
             music_one[music_name] = music_link
             return music_one
-        except:
+        except Exception as e:
             music_dict = {}
             ps = bs.find_all('p')
             
@@ -123,8 +129,8 @@ def find_song(link):
     
     
             return music_dict
-    except:
-        print('From find_song func invalid input')
+    except Exception as e:
+        print(f'From find_song func invalid input {e}')
         
 def remove_stop_words(text: str) -> str:
     words = text.split()
@@ -164,7 +170,7 @@ def process_song_list(songs: list[str]) -> list[str]:
     return cleaned_songs
 
 
-def handle_song_search_results(search_query: str):
+async def handle_song_search_results(search_query: str, client, scrape_semaphore):
     """
     Searches for a song and handles the results based on whether a single link
     or a dictionary of songs is returned.
@@ -173,7 +179,7 @@ def handle_song_search_results(search_query: str):
         search_query: The user's input for searching the song.
     """
     try:
-        results = find_song(search_query) # فرض می‌کنیم تابع find_song شما اینجاست
+        results = await find_song(search_query, client, scrape_semaphore) # فرض می‌کنیم تابع find_song شما اینجاست
     
         if isinstance(results, str): # اگر خروجی یک لینک (رشته) بود
             print(f"یک آهنگ پیدا شد: {results}")
@@ -199,31 +205,59 @@ def handle_song_search_results(search_query: str):
                 processed_dict = results
                 print("دیکشنری اصلی:")
                 print(processed_dict)
-            return  processed_dict, action
-    except:
-        print('From handle_song_search Invalid input')
+            return  processed_dict
+    except Exception as e:
+        print(f'From handle_song_search Invalid input {e}')
 
 
 
 
-def process_search_query(query):
-    my_dict = search_song(query)
+async def process_search_query_get(query, client , scrape_semaphore):
+    my_dict = await search_song(query, client, scrape_semaphore)
     if not my_dict:
         return None
 
     results = {}
     links = list(my_dict.values())
 
-    for link in links:
-        add_dict = handle_song_search_results(link)[0]
-        results.update(add_dict)
+    tasks = [handle_song_search_results(link, client, scrape_semaphore)
+    for link in links]
+
+    responses = await asyncio.gather(*tasks)
+    for response in responses:
+        if not response:
+            continue
+        results.update(response)
     return results
 
-# results = process_search_query('ها نوان قطار یکی پیدا')
 
-# if results is None:
-#     print("آهنگی پیدا نشد")
-# else:
-#     print(results)
+async def process_search_query(query):
+    headers = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/124.0 Safari/537.36"
+            )
+        }
+    
+    limits = httpx.Limits(
+    max_connections = 20, 
+    max_keepalive_connections = 10
+        )
+    
+    timeout = httpx.Timeout(
+            connect= 10, read= 15, write= 15, pool= 15
+            )
+    
+    client = httpx.AsyncClient(headers= headers,timeout= timeout,limits= limits , follow_redirects= True)
 
+    scrape_semaphore = asyncio.Semaphore(5)
+    res = await process_search_query_get(query, client, scrape_semaphore)
+    list_res = list(res.keys())
+    print(list_res[0])
+    print(len(list_res))
+    await client.aclose()
 
+query= 'نوان پیدا'
+asyncio.run(process_search_query(query))
