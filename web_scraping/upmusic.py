@@ -4,8 +4,29 @@ from bs4 import BeautifulSoup
 from urllib.parse import quote
 import re
 
+headers = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/124.0 Safari/537.36"
+            )
+        }
+    
+limits = httpx.Limits(
+    max_connections = 20, 
+    max_keepalive_connections = 10
+        )
+    
+timeout = httpx.Timeout(
+            connect= 10, read= 15, write= 15, pool= 15
+            )
+    
+client = httpx.AsyncClient(headers= headers,timeout= timeout,limits= limits , follow_redirects= True)
+scrape_semaphore = asyncio.Semaphore(5)
 
-
+async def close_client():
+    await client.aclose()
 
 STOP_WORDS = {
     "اهنگ",
@@ -231,33 +252,20 @@ async def process_search_query_get(query, client , scrape_semaphore):
     return results
 
 
-async def process_search_query(query):
-    headers = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
-        "Chrome/124.0 Safari/537.36"
-            )
-        }
-    
-    limits = httpx.Limits(
-    max_connections = 20, 
-    max_keepalive_connections = 10
-        )
-    
-    timeout = httpx.Timeout(
-            connect= 10, read= 15, write= 15, pool= 15
-            )
-    
-    client = httpx.AsyncClient(headers= headers,timeout= timeout,limits= limits , follow_redirects= True)
+async def process_search_query(query, client = client, scrape_semaphore = scrape_semaphore):
 
-    scrape_semaphore = asyncio.Semaphore(5)
-    res = await process_search_query_get(query, client, scrape_semaphore)
-    list_res = list(res.keys())
-    print(list_res[0])
-    print(len(list_res))
-    await client.aclose()
-
-query= 'نوان پیدا'
-asyncio.run(process_search_query(query))
+    try:
+        result = await process_search_query_get(query, client, scrape_semaphore)
+        if result:
+            list_res = list(result.keys())
+            print(list_res[0])
+            print(len(list_res))
+            return result
+    except Exception as e:
+        print(f'From "process_search_query" function {e}')
+        return None
+    
+    
+# how to test
+# query= 'نوان پیدا'
+# asyncio.run(process_search_query(query))
