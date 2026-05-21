@@ -1,5 +1,6 @@
 from openai import OpenAI
 from decouple import config
+import json
 
 api_token = config('API_TOKEN')
 
@@ -9,26 +10,39 @@ client = OpenAI(base_url='https://api.gapgpt.app/v1', api_key=api_token)
 
 def dedicate_singer(text):
     prompt = f"""
-           تو یک دستیار تشخیص نام آهنگ و نام خواننده هستی
-           - متن داده شده بهت رو اصلا تغییر نده
-           - نام خواننده و نام اهنگ رو از متن تشخیص بده و به فرمت JSON بنویس
-           - خروجی کار به این شکل باشد  مثال (محسن چاوشی قطار)
-            dedicated = (
-                'artist': 'محسن چاوشی',
-                'song': 'قطار'
-            )
+    تو یک استخراج‌کننده اطلاعات موسیقی هستی.
 
-            
-            {text}
-            """
+    وظیفه:
+    - از متن ورودی فقط نام خواننده و نام آهنگ را تشخیص بده
+    - متن ورودی را تغییر نده
+    - فقط و فقط یک JSON معتبر خروجی بده
+    - هیچ توضیحی، هیچ متن اضافه‌ای، و هیچ markdownی ننویس
+
+    فرمت خروجی دقیق:
+    {{
+    "artist": "نام خواننده",
+    "song": "نام آهنگ"
+    }}
+
+    اگر نتوانستی تشخیص بدهی، مقدار مربوطه را null بگذار.
+
+    متن ورودی:
+    {text}
+    """
     try:
         response = client.responses.create(
-            model="gpt-5.3-chat-latest",
-            input=prompt
+        model="gpt-5.3-chat-latest",
+        input=prompt
         )
-
-        return response.output_text
+        raw_output = response.output_text
+        data = json.loads(raw_output)   # تبدیل string به dict
+        return data
     except Exception as e:
         return f"An error occurred: {e}"
     
-print(dedicate_singer('علیرضا طلیسچی  بارون اومد و یادم داد'))
+
+# how to test
+# output = dedicate_singer('علیرضا طلیسچی  بارون اومد و یادم داد')
+# print(type(output))
+      
+# print(output)
