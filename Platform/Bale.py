@@ -1,14 +1,24 @@
 from balethon import Client
-import httpx, io
 from balethon.conditions import private
 from balethon.objects import InlineKeyboard
+
+from decouple import config
+
+import httpx, io
+
 import asyncio
 from dictation.dic_word import dictation , only_removing , find_similar_songs
 # from dictation.ai_text import correct_grammar 
 from dictation.ai_singer_name import dedicate_singer
-from decouple import config
-from web_scraping.upmusic import process_search_query, close_client
+
+
+from web_scraping.scrape_runner import process_search_query
+from web_scraping.musicsweb import close_client_musicsweb
+from web_scraping.upmusic import close_client_upmusics
+from web_scraping.gisomusic import close_client_gisomusic
+
 from .audio_downloader import send_music, close_download_client
+
 from spotify_service.Formatter import format_song
 from youtube_service.Search_System import search_youtube
 
@@ -36,6 +46,7 @@ async def answer_callback_query(callback_query):
 
     user_id = callback_query.author.id
     user_state.setdefault(user_id, {"state": None})
+    temp_text = 'موقتا در دسترس نمیباشد'
 
     if callback_query.data == 'waiting_for_name':
         user_state[user_id]["state"] = "waiting_for_name"
@@ -44,17 +55,17 @@ async def answer_callback_query(callback_query):
         
     elif callback_query.data == 'waiting_for_text':
         user_state[user_id]["state"] = "waiting_for_text"
-        await callback_query.message.edit('لطفا متن اهنگ مورد نظر را وارد کنید')
+        await callback_query.message.edit(temp_text)
         await callback_query.answer('جستوجو با متن اهنگ')
 
     elif callback_query.data == 'waiting_for_voice':
         user_state[user_id]["state"] = "waiting_for_text"
-        await callback_query.message.edit('لطفا وویس اهنگ مورد نظر را ارسال کنید')
+        await callback_query.message.edit(temp_text)
         await callback_query.answer('جستوجو با وویس اهنگ')
 
     elif callback_query.data == 'waiting_for_link':
         user_state[user_id]["state"] = "waiting_for_text"
-        await callback_query.message.edit('لطفا لینک اهنگ مورد نظر را ارسال کنید')
+        await callback_query.message.edit(temp_text)
         await callback_query.answer('جستوجو با لینک اهنگ')
         
     else:
@@ -161,7 +172,9 @@ def bot_run():
         print("Bot is running...")
         bot.run()
     finally:
-        asyncio.run(close_client())
+        asyncio.run(close_client_upmusics())
+        asyncio.run(close_client_musicsweb())
+        asyncio.run(close_client_gisomusic())
         asyncio.run(close_download_client())
     
 
