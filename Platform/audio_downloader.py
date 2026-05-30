@@ -1,10 +1,11 @@
 import os
 import uuid
 import httpx
+from balethon.objects import InlineKeyboardButton, InlineKeyboard
 import asyncio
 
-download_semaphore = asyncio.Semaphore(3)
-
+download_semaphore = asyncio.Semaphore(5)
+send_semaphore = asyncio.Semaphore(2)
 headers = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -28,19 +29,75 @@ download_client = httpx.AsyncClient(headers= headers,timeout= timeout,limits= li
 async def close_download_client():
     await download_client.aclose()
 
+MAX_FILE_SIZE_MB = 20
+
+
+
+async def get_remote_file_size_mb(url):
+    try:
+        response = await download_client.head(url)
+
+        content_length = response.headers.get("Content-Length")
+
+        if content_length:
+            return round(
+                int(content_length) / (1024 * 1024),
+                2
+            )
+
+    except Exception as e:
+        print("Remote Size Error:", e)
+
+    return None
+
+def get_local_file_size_mb(file_path):
+    try:
+        return round(
+            os.path.getsize(file_path) / (1024 * 1024),
+            2
+        )
+
+    except Exception as e:
+        print("Local Size Error:", e)
+
+    return None
+
+
 async def download_music(url, title, artist):
-
     file_name = f"temp/{uuid.uuid4()}.mp3"
-
-    # download
 
     async with download_client.stream("GET", url) as response:
         response.raise_for_status()
-        with open(file_name, 'wb') as f:
+
+        with open(file_name, "wb") as f:
             async for chunk in response.aiter_bytes(1024 * 64):
                 f.write(chunk)
 
-        return file_name
+    return file_name
+
+send_semaphore = asyncio.Semaphore(1)
+
+async def safe_send_audio(bot, chat_id, file_path, title, artist):
+    last_error = None
+
+
+    try:
+        async with send_semaphore:
+            with open(file_path, "rb") as audio_file:
+                return await bot.send_audio(
+                    chat_id=chat_id,
+                    title=f"{artist}  {title}",
+                        audio=audio_file,
+                        caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/Y_Music_bot)"
+                    )
+
+    except Exception as e:
+        last_error = e
+        print(f"Send audio attempt,  failed:", e)
+        await asyncio.sleep(3)
+
+    raise last_error
+
 
 async def send_music(
     bot,
@@ -50,26 +107,82 @@ async def send_music(
     artist
 ):
     file_path = None
-    async with download_semaphore:
-        file_path = await download_music(
-            url=url,
-            title=title,
-            artist=artist
-        )
-        try:
-            
-            with open(file_path, "rb") as audio_file:
 
-        #     sending file
-                await bot.send_audio(
-                    chat_id=chat_id,
-                    title = f"{artist} - {title}",
-                    audio=audio_file,
-                    caption=f"\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/Y_Music_bot)"
+    try:
+        # =========================
+        # check size before download
+        # =========================
+
+        size = await get_remote_file_size_mb(url)
+
+        if size:
+            print(f"Remote File Size: {size:.2f} MB")
+
+            if size > MAX_FILE_SIZE_MB:
+                button_text = f"{size or 'نامشخص'} MB 🔗 دانلود مستقیم آهنگ"
+
+                await bot.send_message(
+                chat_id,
+                f"❌ حجم فایل بیشتر از محدودیت بله است.\n\n"
+                f"🎵 {artist} {title}\n\n"
+                f"برای دانلود مستقیم روی دکمه زیر بزن:",
+                InlineKeyboard(
+                    [InlineKeyboardButton(button_text, url=url)]
                 )
+            )
 
-        finally:
-            if file_path and os.path.exists(file_path):    
-                os.remove(file_path)
+                return
+
+        # =========================
+        # download file
+        # =========================
+
+        async with download_semaphore:
+
+            file_path = await download_music(
+                url=url,
+                title=title,
+                artist=artist
+            )
+
+        # =========================
+        # check size after download
+        # =========================
+
+        size = get_local_file_size_mb(file_path)
+
+        print(f"Downloaded File Size: {size:.2f} MB")
+
+        if size > MAX_FILE_SIZE_MB:
+            button_text = f"{size or 'نامشخص'} MB 🔗 دانلود مستقیم آهنگ"
+            await bot.send_message(
+                chat_id,
+                f"❌ حجم فایل بیشتر از محدودیت بله است.\n\n"
+                f"🎵 {artist} {title}\n\n"
+                f"برای دانلود مستقیم روی دکمه زیر بزن:",
+                InlineKeyboard(
+                    [InlineKeyboardButton(button_text, url=url)]
+                )
+            )
+
+            return
+
+        # =========================
+        # send audio
+        # =========================
+
+        await safe_send_audio(
+            bot,
+            chat_id,
+            file_path,
+            title,
+            artist
+        )
+
+    finally:
+
+        if file_path and os.path.exists(file_path):
+
+            os.remove(file_path)
 
             print("File Deleted")
