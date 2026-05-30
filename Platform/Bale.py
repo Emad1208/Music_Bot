@@ -133,7 +133,7 @@ async def get_song_name(*, message):
     
     elif current_state == 'waiting_for_text':
         dictated_text = await dictation(text)
-        text_song = correct_grammar(dictated_text)
+        # text_song = correct_grammar(dictated_text)
         await message.reply(
             f"🔍 در حال جستجوی متن آهنگ:\n*{dictated_text}*")
         
