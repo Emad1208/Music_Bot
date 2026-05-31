@@ -11,24 +11,26 @@ global_search_query = asyncio.Semaphore(10)
 
 async def process_search_query(song):
     async with global_search_query:
-        # musics_web, upmusics, gisomusic = await asyncio.gather(
-        #     # process_search_query_musicsweb(song),
-        #     # process_search_query_upmusics(song),
-        #     process_search_query_gisomusic(song)
-        # )
-        gisomusic = await process_search_query_gisomusic(song)
-    # info_upmusics = await find_similar_songs(song, upmusics)
-    # info_musics_web = await find_similar_songs(song, musics_web)
+        musics_web, upmusics, gisomusic = await asyncio.gather(
+            process_search_query_musicsweb(song),
+            process_search_query_upmusics(song),
+            process_search_query_gisomusic(song)
+        )
     info_gisomusic = await find_similar_songs(song, gisomusic)
-
-    # if info_upmusics:
-    #     return info_upmusics
-
-    # if info_musics_web:
-    #     return info_musics_web
+    info_musics_web = await find_similar_songs(song, musics_web)
+    info_upmusics = await find_similar_songs(song, upmusics)
+    
+    if info_upmusics:
+        return info_upmusics
 
     if info_gisomusic:
         return info_gisomusic
+
+    if info_musics_web:
+        return info_musics_web
+
+    
+    
 
     return []
 

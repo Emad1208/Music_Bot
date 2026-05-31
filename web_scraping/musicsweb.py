@@ -65,12 +65,19 @@ async def find_song(url, client, scrape_semaphore):
             music_name = remove_stop_words(music_name)
 
             music_links = bs.find_all('div', class_ = 'musiclinks')
-            music_link = music_links[1].find('a', title='دانلود آهنگ با کیفیت 320').get('href')
-            if music_link:
-                music_one[music_name] = music_link
-                return music_one
+            music_link_128 = music_links[1].find('a', title='دانلود آهنگ با کیفیت 128').get('href')
+            music_link_320 = music_links[1].find('a', title='دانلود آهنگ با کیفیت 320').get('href')
+            qualities = {}
+            if music_link_128:
+                qualities['128'] = {'url' : music_link_128}
+            if music_link_320:
+                qualities['320'] = {'url' : music_link_320}
+
+            if music_name and qualities:
+                music_one[music_name] = qualities
             else:
                 print('link not find')
+            return music_one
             
         except:
             content = bs.find('div', class_='content')
@@ -157,9 +164,15 @@ async def find_song(url, client, scrape_semaphore):
                 if title and link:
                     title = re.sub(r'[^\w\s\u0600-\u06FF]', '', title).strip()
                     title = remove_stop_words(title)
+
                     music_names.append(title)
                     music_links.append(link)
-                    musics_dict[title] = link
+
+                    musics_dict[title] = {
+                        "نامشخص": {
+                            "url": link
+                        }
+                    }
 
             # print(len(music_names))
             # print(len(music_links))

@@ -85,14 +85,25 @@ async def find_song(url, client, scrape_semaphore):
         bs = BeautifulSoup(r.text,'html.parser')
         try:
             music_one = {}
-            music_link = bs.find('article', attrs ={  'class': "upsng"}).find('div', attrs ={'class':"updmp3 upf"}).find('a').get('href')
+            music_link_320 = bs.find('article', attrs ={  'class': "upsng"}).find('div', attrs ={'class':"updmp3 upf"}).find('a', title = 'دانلود آهنگ با کیفیت عالی (320)').get('href')
+            music_link_128 = bs.find('article', attrs ={  'class': "upsng"}).find('div', attrs ={'class':"updmp3 upf"}).find('a', title = 'دانلود آهنگ با کیفیت خوب (128)').get('href')
             music_name = bs.find('article', attrs ={  'class': "upsng"}).find('p').get_text('title')
             if "title" in music_name:
             # Remove "Unknown - " prefix
                 music_name = music_name.replace("title", "").strip()
             music_name = remove_stop_words(music_name)
-            music_one[music_name] = music_link
+            qualities = {}
+            if music_link_128:
+                qualities['128'] = {'url' : music_link_128}
+            if music_link_320:
+                qualities['320'] = {'url' : music_link_320}
+
+            if music_name and qualities:
+                music_one[music_name] = qualities
+            else:
+                print('link not find')
             return music_one
+        
         except Exception as e:
             music_dict = {}
             ps = bs.find_all('p')
@@ -147,7 +158,13 @@ async def find_song(url, client, scrape_semaphore):
             
                 if link:
                     key = f"{singer} - {song}"
-                    music_dict[key] = link
+                    key = remove_stop_words(key)
+
+                    music_dict[key] = {
+                        "نامشخص": {
+                            "url": link
+                        }
+                    }
     
     
             return music_dict
@@ -196,14 +213,11 @@ async def handle_song_search_results(search_query: str, client, scrape_semaphore
         results = await find_song(search_query, client, scrape_semaphore) # فرض می‌کنیم تابع find_song شما اینجاست
     
         if isinstance(results, str): # اگر خروجی یک لینک (رشته) بود
-            print(f"یک آهنگ پیدا شد: {results}")
+            # print(f"یک آهنگ پیدا شد: {results}")
             action = 'one_result'
             return results, action
         elif isinstance(results, dict): # اگر خروجی یک دیکشنری بود
-            print("چند آهنگ پیدا شد. در حال پردازش هر کدام:")
-            # اینجا کارهایی که باید با دیکشنری انجام شود را بنویسید
-            # مثال: پردازش کلیدها و مقادیر دیکشنری
-            
+
             # مثال: اگر بخواهید کلیدهای تمیز شده را با مقادیر قبلی جایگزین کنید
             name_list_dic = list(results.keys())
             cleaned = process_song_list(name_list_dic) # فرض می‌کنیم تابع process_song_list شما اینجاست
@@ -211,9 +225,8 @@ async def handle_song_search_results(search_query: str, client, scrape_semaphore
             # اطمینان از هم‌طول بودن لیست کلیدهای تمیز شده و مقادیر دیکشنری
             if len(cleaned) == len(list(results.values())):
                 processed_dict = dict(zip(cleaned, results.values()))
-                print("دیکشنری با کلیدهای تمیز شده:")
-                # print(processed_dict)
-                # اینجا می‌توانید کارهای بیشتری با processed_dict انجام دهید
+                # print("دیکشنری با کلیدهای تمیز شده:")
+
             else:
                 print("تعداد کلیدهای تمیز شده با تعداد مقادیر مطابقت ندارد. دیکشنری پردازش نشد.")
                 processed_dict = results
