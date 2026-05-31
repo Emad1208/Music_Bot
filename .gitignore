@@ -1,9 +1,20 @@
 /venv
 /__pycache__
+/test
 z_helping functions.py
 text.txt
-/youtube_service/__pycache__
-/spotify_service/__pycache__
+.env
+config.py
+/youtube_service
+/spotify_service
+/temp
+/shazam_service
 /Platform/__pycache__
 /dictation/__pycache__
+/dictation/fa_word_count.json
 /web_scraping/__pycache__
+/web_scraping/gisomusic.ipynb
+/web_scraping/upmusics.ipynb
+/web_scraping/musicsweb.ipynb
+/web_scraping/.ipynb_checkpoints
+/web_scraping/untitled.ipynb

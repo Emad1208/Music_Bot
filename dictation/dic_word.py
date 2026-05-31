@@ -174,37 +174,41 @@ load_json_dictionary(json_path)
 # Finding similar name 
 # =====================================
 
-async def find_similar_songs(user_input: str, song_dict: dict, similarity_threshold: int = 70) -> list[dict]:
-    """
-    Compares user input with song names in a dictionary and returns songs
-    that meet the similarity threshold, along with their page URLs.
+#     """
+#     Compares user input with song names in a dictionary and returns songs
+#     that meet the similarity threshold, along with their page URLs.
     
-    Args:
-        user_input: The song name/query provided by the user.
-        song_dict: A dictionary where keys are song names and values are their URLs.
-        similarity_threshold: The minimum similarity percentage (0-100) to consider a match.
-        
-    Returns:
-        A list of dictionaries, where each dictionary contains 'name', 'url', and 'similarity'
-        for songs that match the threshold.
-    """
-    matche_link = []
-    user_input_lower = user_input.lower()
-    
-    for song_name, song_url in song_dict.items():
-        song_name_lower = song_name.lower()
-        # محاسبه شباهت با استفاده از RapidFuzz
-        similarity = fuzz.ratio(user_input_lower, song_name_lower)
-        
+#     Args:
+#         user_input: The song name/query provided by the user.
+#         song_dict: A dictionary where keys are song names and values are their URLs.
+#         similarity_threshold: The minimum similarity percentage (0-100) to consider a match.
+
+async def find_similar_songs(user_input: str, song_dict: dict, similarity_threshold: int = 60) -> list[dict]:
+    matched_links = []
+
+    if not song_dict:
+        return matched_links
+
+    user_words = user_input.lower().split()
+
+    for song_name, song_data in song_dict.items():
+        song_words = song_name.lower().split()
+
+        scores = []
+        for u_word in user_words:
+            best = max((fuzz.ratio(u_word, s_word) for s_word in song_words), default=0)
+            scores.append(best)
+
+        similarity = sum(scores) / len(scores) if scores else 0
+
         if similarity >= similarity_threshold:
-            matche_link.append(song_name)
-            matche_link.append(song_url)
-            # matche_link.append(similarity)
-            
-    # مرتب‌سازی نتایج بر اساس بیشترین شباهت (از بالا به پایین)
-    # matche_link.sort(key=lambda x: x['similarity'], reverse=True)
-    
-    return matche_link
+            matched_links.append({
+                "name": song_name,
+                "qualities": song_data,
+                "similarity": similarity
+            })
+    matched_links.sort(key= lambda x : x['similarity'], reverse= True)
+    return matched_links
 
 # =====================================
 # test

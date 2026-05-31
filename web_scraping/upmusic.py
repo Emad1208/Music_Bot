@@ -3,6 +3,7 @@ import asyncio
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 import re
+from .helping_func_scraping import remove_stop_words
 
 headers = {
     "User-Agent": (
@@ -25,7 +26,7 @@ timeout = httpx.Timeout(
 client = httpx.AsyncClient(headers= headers,timeout= timeout,limits= limits , follow_redirects= True)
 scrape_semaphore = asyncio.Semaphore(5)
 
-async def close_client():
+async def close_client_upmusics():
     await client.aclose()
 
 STOP_WORDS = {
@@ -76,9 +77,9 @@ async def search_song(text, client, scrape_semaphore):
 
 
 
-async def find_song(link, client, scrape_semaphore):
+async def find_song(url, client, scrape_semaphore):
     try:
-        url = link
+
         async with scrape_semaphore:
             r = await client.get(url)
         bs = BeautifulSoup(r.text,'html.parser')
@@ -151,16 +152,8 @@ async def find_song(link, client, scrape_semaphore):
     
             return music_dict
     except Exception as e:
-        print(f'From find_song func invalid input {e}')
-        
-def remove_stop_words(text: str) -> str:
-    words = text.split()
-    cleaned_words = [
-        word for word in words
-        if word not in STOP_WORDS
-    ]
-    return " ".join(cleaned_words)
-    
+        print(f'From find_song upmusics func invalid input {e}')
+           
 
 def clean_song_name(name_and_artist: str) -> str:
     """Cleans up song names, especially those starting with 'Unknown'.
@@ -252,7 +245,7 @@ async def process_search_query_get(query, client , scrape_semaphore):
     return results
 
 
-async def process_search_query(query, client = client, scrape_semaphore = scrape_semaphore):
+async def process_search_query_upmusics(query, client = client, scrape_semaphore = scrape_semaphore):
 
     try:
         result = await process_search_query_get(query, client, scrape_semaphore)
