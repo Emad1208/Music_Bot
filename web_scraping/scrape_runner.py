@@ -2,6 +2,7 @@ from dictation.dic_word import find_similar_songs
 from .musicsweb import process_search_query_musicsweb
 from .upmusic import process_search_query_upmusics
 from .gisomusic import process_search_query_gisomusic
+from Platform.audio_downloader import get_remote_file_size_mb
 import asyncio
 import time
 import uuid
@@ -16,27 +17,60 @@ async def process_search_query(song):
             process_search_query_upmusics(song),
             process_search_query_gisomusic(song)
         )
+
     info_gisomusic = await find_similar_songs(song, gisomusic)
     info_musics_web = await find_similar_songs(song, musics_web)
     info_upmusics = await find_similar_songs(song, upmusics)
-    
-    if info_upmusics:
-        return info_upmusics
 
-    if info_gisomusic:
-        return info_gisomusic
+    valid_upmusics = await filter_valid_top_results(info_upmusics)
+    if valid_upmusics:
+        return valid_upmusics
 
-    if info_musics_web:
-        return info_musics_web
+    valid_gisomusic = await filter_valid_top_results(info_gisomusic)
+    if valid_gisomusic:
+        return valid_gisomusic
 
-    
-    
+    valid_musics_web = await filter_valid_top_results(info_musics_web)
+    if valid_musics_web:
+        return valid_musics_web
 
     return []
 
 
 
+async def filter_valid_top_results(results, limit=5):
+    valid_results = []
 
+    if not results:
+        return []
+
+    for item in results:
+        qualities = item.get("qualities", {})
+
+        has_valid_size = False
+
+        for quality, info in qualities.items():
+            if not isinstance(info, dict):
+                continue
+
+            link = info.get("url")
+            if not link:
+                continue
+
+            size = await get_remote_file_size_mb(link)
+
+            if size is not None:
+                qualities[quality]["size"] = size
+                has_valid_size = True
+
+        if has_valid_size:
+            item["qualities"] = qualities
+            valid_results.append(item)
+
+        if len(valid_results) >= limit:
+            break
+
+    return valid_results
 
 async def show_music_results(message, song, search_results_cache):
     music_info = await process_search_query(song)
