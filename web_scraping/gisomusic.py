@@ -23,14 +23,13 @@ timeout = httpx.Timeout(
             connect= 10, read= 15, write= 15, pool= 15
             )
     
-client = httpx.AsyncClient(headers= headers,timeout= timeout,limits= limits , follow_redirects= True)
+client = httpx.AsyncClient(headers= headers,timeout= timeout,limits= limits , follow_redirects= True, verify= False)
 scrape_semaphore = asyncio.Semaphore(5)
 
 async def close_client_gisomusic():
     await client.aclose()
 
-async def search_song(text, client, scrape_semaphore):
-
+async def search_song(text):
     url = f'https://gisomusic.com/search/{quote(text)}'
     async with scrape_semaphore:
         r = await client.get(url)
@@ -49,7 +48,7 @@ async def search_song(text, client, scrape_semaphore):
     return musics if musics else None
 
 
-async def find_song(url, client, scrape_semaphore):
+async def find_song(url):
     try:
         async with scrape_semaphore:
             r = await client.get(url)
@@ -83,16 +82,15 @@ async def find_song(url, client, scrape_semaphore):
         print(f'From find_song gisomusic func invalid input {e}')
 
 
-async def process_search_query_get(query, client , scrape_semaphore):
-    my_dict = await search_song(query, client, scrape_semaphore)
+async def process_search_query_get(query):
+    my_dict = await search_song(query)
     if not my_dict:
         return None
 
     results = {}
     links = list(my_dict.values())
 
-    tasks = [find_song(link, client, scrape_semaphore)
-    for link in links]
+    tasks = [find_song(link) for link in links]
 
     responses = await asyncio.gather(*tasks)
     for response in responses:
@@ -102,16 +100,11 @@ async def process_search_query_get(query, client , scrape_semaphore):
     return results
 
 
-async def process_search_query_gisomusic(query, client = client, scrape_semaphore = scrape_semaphore):
-
+async def process_search_query_gisomusic(query):
     try:
-        result = await process_search_query_get(query, client, scrape_semaphore)
+        result = await process_search_query_get(query)
         if result:
-            list_res = list(result.keys())
-            print(list_res[0])
-            print(len(list_res))
             return result
     except Exception as e:
         print(f'From "process_search_query" function {e}')
         return None
-

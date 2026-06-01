@@ -18,7 +18,7 @@ from web_scraping.musicsweb import close_client_musicsweb
 from web_scraping.upmusic import close_client_upmusics
 from web_scraping.gisomusic import close_client_gisomusic
 
-from .audio_downloader import send_music, close_download_client ,get_remote_file_size_mb
+from .audio_downloader import send_music, close_download_client ,get_remote_file_size_mb,close_download_client_no_ssl
 
 # from spotify_service.Formatter import format_song
 # from youtube_service.Search_System import search_youtube
@@ -315,6 +315,7 @@ def bot_run():
         asyncio.run(close_client_musicsweb())
         asyncio.run(close_client_gisomusic())
         asyncio.run(close_download_client())
+        asyncio.run(close_download_client_no_ssl())
     
 
 

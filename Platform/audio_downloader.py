@@ -23,11 +23,27 @@ limits = httpx.Limits(
 timeout = httpx.Timeout(
             connect= 10, read= 15, write= 15, pool= 15
             )
-    
-download_client = httpx.AsyncClient(headers= headers,timeout= timeout,limits= limits , follow_redirects= True)
+
+download_client = httpx.AsyncClient(
+    headers=headers,
+    timeout=timeout,
+    limits=limits,
+    follow_redirects=True
+)
+
+download_client_no_ssl = httpx.AsyncClient(
+    headers=headers,
+    timeout=timeout,
+    limits=limits,
+    follow_redirects=True,
+    verify=False
+)
 
 async def close_download_client():
     await download_client.aclose()
+
+async def close_download_client_no_ssl():
+    await download_client_no_ssl.aclose()
 
 MAX_FILE_SIZE_MB = 20
 
@@ -35,7 +51,18 @@ MAX_FILE_SIZE_MB = 20
 
 async def get_remote_file_size_mb(url):
     try:
-        response = await download_client.head(url)
+
+        verify_ssl = not (
+            "gisomusic.com" in url or
+            "dl.gisomusic.com" in url
+        )
+
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            verify=verify_ssl
+        ) as client:
+
+            response = await client.head(url)
 
         content_length = response.headers.get("Content-Length")
 
@@ -63,10 +90,16 @@ def get_local_file_size_mb(file_path):
     return None
 
 
+def need_no_ssl(url):
+    return "gisomusic.com" in url
+
+
 async def download_music(url, title, artist):
     file_name = f"temp/{uuid.uuid4()}.mp3"
 
-    async with download_client.stream("GET", url) as response:
+    client = download_client_no_ssl if need_no_ssl(url) else download_client
+
+    async with client.stream("GET", url) as response:
         response.raise_for_status()
 
         with open(file_name, "wb") as f:
