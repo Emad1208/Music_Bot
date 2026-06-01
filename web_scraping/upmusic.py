@@ -79,98 +79,102 @@ async def search_song(text, client, scrape_semaphore):
 
 async def find_song(url, client, scrape_semaphore):
     try:
-
         async with scrape_semaphore:
             r = await client.get(url)
-        bs = BeautifulSoup(r.text,'html.parser')
-        try:
+
+        bs = BeautifulSoup(r.text, 'html.parser')
+        music_dict = {}
+
+        article = bs.find('article', class_="upsng")
+
+        # حالت اول: صفحه تک آهنگ با کیفیت 128 و 320
+        if article:
             music_one = {}
-            music_link_320 = bs.find('article', attrs ={  'class': "upsng"}).find('div', attrs ={'class':"updmp3 upf"}).find('a', title = 'دانلود آهنگ با کیفیت عالی (320)').get('href')
-            music_link_128 = bs.find('article', attrs ={  'class': "upsng"}).find('div', attrs ={'class':"updmp3 upf"}).find('a', title = 'دانلود آهنگ با کیفیت خوب (128)').get('href')
-            music_name = bs.find('article', attrs ={  'class': "upsng"}).find('p').get_text('title')
-            if "title" in music_name:
-            # Remove "Unknown - " prefix
+
+            p_tag = article.find('p')
+            music_name = p_tag.get_text('title') if p_tag else None
+
+            if music_name and "title" in music_name:
                 music_name = music_name.replace("title", "").strip()
-            music_name = remove_stop_words(music_name)
+
+            if music_name:
+                music_name = remove_stop_words(music_name)
+
+            download_box = article.find('div', class_="updmp3 upf")
+
             qualities = {}
-            if music_link_128:
-                qualities['128'] = {'url' : music_link_128}
-            if music_link_320:
-                qualities['320'] = {'url' : music_link_320}
+
+            if download_box:
+                link_128_tag = download_box.find('a', title='دانلود آهنگ با کیفیت خوب (128)')
+                link_320_tag = download_box.find('a', title='دانلود آهنگ با کیفیت عالی (320)')
+
+                if link_128_tag:
+                    qualities['128'] = {'url': link_128_tag.get('href')}
+
+                if link_320_tag:
+                    qualities['320'] = {'url': link_320_tag.get('href')}
 
             if music_name and qualities:
-                music_one[music_name] = qualities
-            else:
-                print('link not find')
-            return music_one
-        
-        except Exception as e:
-            music_dict = {}
-            ps = bs.find_all('p')
-            
-            for i in range(len(ps)):
-                p = ps[i]
-                text = p.get_text(" ", strip=True)
-            
-                # فقط p هایی که متن دارند
-                if not text:
-                    continue
-            
-                # اگر لینک دانلود داخل همین p باشد
-                download_tag = p.find('a', class_='umlnks')
-                if download_tag:
-                    # این p خودش لینک دانلود است، پس از روی آن key نمی‌سازیم
-                    continue
-            
-                singer = None
-                song = None
-            
-                # حالت 1 و 2: وجود |
-                if '|' in text:
-                    left, right = text.split('|', 1)
-                    song = right.replace('♪', '').strip()
-            
-                    singer_tag = p.find('a', class_='auto-link')
-                    if singer_tag:
-                        singer = singer_tag.get_text(strip=True)
-                    else:
-                        singer = re.sub(r'^\d+\.\s*', '', left).strip()
-            
-                else:
-                    # حالت 3: فقط متن آهنگ، بدون خواننده
-                    song = re.sub(r'^\d+\.\s*', '', text).replace('♪', '').strip()
-                    singer = "Unknown"
-            
-                # پیدا کردن لینک دانلود نزدیک
-                link = None
-            
-                # اول بررسی p بعدی
-                if i + 1 < len(ps):
-                    next_download = ps[i + 1].find('a', class_='umlnks')
-                    if next_download:
-                        link = next_download.get('href')
-            
-                # اگر نبود، p قبلی را هم چک کن
-                if not link and i - 1 >= 0:
-                    prev_download = ps[i - 1].find('a', class_='umlnks')
-                    if prev_download:
-                        link = prev_download.get('href')
-            
-                if link:
-                    key = f"{singer} - {song}"
-                    key = remove_stop_words(key)
+                music_dict[music_name] = qualities
 
-                    music_dict[key] = {
-                        "نامشخص": {
-                            "url": link
-                        }
+
+        # حالت دوم: صفحه چند آهنگ / تک‌لینک با class="umlnks"
+        
+        ps = bs.find_all('p')
+
+        for i, p in enumerate(ps):
+            text = p.get_text(" ", strip=True)
+
+            if not text:
+                continue
+
+            if p.find('a', class_='umlnks'):
+                continue
+
+            singer = None
+            song = None
+
+            if '|' in text:
+                left, right = text.split('|', 1)
+                song = right.replace('♪', '').strip()
+
+                singer_tag = p.find('a', class_='auto-link')
+                if singer_tag:
+                    singer = singer_tag.get_text(strip=True)
+                else:
+                    singer = re.sub(r'^\d+\.\s*', '', left).strip()
+            else:
+                song = re.sub(r'^\d+\.\s*', '', text).replace('♪', '').strip()
+                singer = "Unknown"
+
+            link = None
+
+            if i + 1 < len(ps):
+                next_download = ps[i + 1].find('a', class_='umlnks')
+                if next_download:
+                    link = next_download.get('href')
+
+            if not link and i - 1 >= 0:
+                prev_download = ps[i - 1].find('a', class_='umlnks')
+                if prev_download:
+                    link = prev_download.get('href')
+
+            if link:
+                key = f"{singer} - {song}"
+                key = remove_stop_words(key)
+
+                music_dict[key] = {
+                    "نامشخص": {
+                        "url": link
                     }
-    
-    
-            return music_dict
+                }
+        # print(music_dict)
+        return music_dict if music_dict else None
+
     except Exception as e:
         print(f'From find_song upmusics func invalid input {e}')
-           
+        return None
+
 
 def clean_song_name(name_and_artist: str) -> str:
     """Cleans up song names, especially those starting with 'Unknown'.
