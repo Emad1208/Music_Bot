@@ -183,23 +183,37 @@ load_json_dictionary(json_path)
 #         song_dict: A dictionary where keys are song names and values are their URLs.
 #         similarity_threshold: The minimum similarity percentage (0-100) to consider a match.
 
-async def find_similar_songs(user_input: str, song_dict: dict, similarity_threshold: int = 60) -> list[dict]:
+async def find_similar_songs(user_input: str, song_dict: dict, similarity_threshold: int = 45) -> list[dict]:
     matched_links = []
 
     if not song_dict:
         return matched_links
 
     user_words = user_input.lower().split()
+    main_word = user_words[-1] if user_words else ""
 
     for song_name, song_data in song_dict.items():
-        song_words = song_name.lower().split()
+        song_name_lower = song_name.lower()
+        song_words = song_name_lower.split()
 
         scores = []
+
         for u_word in user_words:
-            best = max((fuzz.ratio(u_word, s_word) for s_word in song_words), default=0)
+            best = max(
+                (fuzz.ratio(u_word, s_word) for s_word in song_words),
+                default=0
+            )
             scores.append(best)
 
         similarity = sum(scores) / len(scores) if scores else 0
+
+        # امتیاز ویژه برای کلمه اصلی، مثل "قطار"
+        if main_word and main_word in song_name_lower:
+            similarity += 40
+
+        # امتیاز برای تعداد کلمات مشترک
+        common_words = set(user_words) & set(song_words)
+        similarity += len(common_words) * 10
 
         if similarity >= similarity_threshold:
             matched_links.append({
@@ -207,8 +221,10 @@ async def find_similar_songs(user_input: str, song_dict: dict, similarity_thresh
                 "qualities": song_data,
                 "similarity": similarity
             })
-    matched_links.sort(key= lambda x : x['similarity'], reverse= True)
+
+    matched_links.sort(key=lambda x: x['similarity'], reverse=True)
     return matched_links
+
 
 # =====================================
 # test
