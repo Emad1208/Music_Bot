@@ -215,7 +215,7 @@ async def process_search_query_musicsweb(query, client = client, scrape_semaphor
             print(len(list_res))
             return result
     except Exception as e:
-        print(f'From "process_search_query" function {e}')
+        print(f'From "process_search_query" musicsweb function {e}')
         return None
 
 # text = ''

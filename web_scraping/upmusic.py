@@ -272,7 +272,7 @@ async def process_search_query_upmusics(query, client = client, scrape_semaphore
             print(len(list_res))
             return result
     except Exception as e:
-        print(f'From "process_search_query" function {e}')
+        print(f'From "process_search_query" upmusic function {e}')
         return None
     
     

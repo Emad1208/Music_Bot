@@ -59,6 +59,7 @@ async def find_song(url):
             music_one = {}
 
             music_name = bs.find('div', class_ = "gcntr").find('header').find('a').get('title')
+            music_name = re.sub(r'[^\w\s\u0600-\u06FF]', '', music_name).strip()
             music_name = remove_stop_words(music_name)
 
             music_link_128 = bs.find('div', class_ = "gcntr").find('div', class_ = 'gmp3').find('a' , title = 'دانلود با کیفیت 128').get('href')
@@ -106,5 +107,5 @@ async def process_search_query_gisomusic(query):
         if result:
             return result
     except Exception as e:
-        print(f'From "process_search_query" function {e}')
+        print(f'From "process_search_query" gisomusic function {e}')
         return None
