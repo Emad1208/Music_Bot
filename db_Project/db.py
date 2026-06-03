@@ -71,6 +71,28 @@ class Database:
         """, (user_id,))
 
         return self.cur.fetchone()
+    
+    def get_music_file_id(self, title, quality):
+        self.cur.execute("""
+            SELECT file_id
+            FROM musics
+            WHERE title = ?
+            AND quality = ?
+        """, (title, quality))
+
+        result = self.cur.fetchone()
+
+        if result:
+            return result[0]
+
+        return None
+
+
+    def get_all_titles(self):
+        self.cur.execute("""
+        SELECT title FROM musics
+            """)
+        return [row[0] for row in self.cur.fetchall()]
 
     def add_music(self, title, quality, file_id, file_size, source, source_url):
         self.cur.execute("""
