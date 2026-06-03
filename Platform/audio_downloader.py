@@ -3,6 +3,7 @@ import uuid
 import httpx
 from balethon.objects import InlineKeyboardButton, InlineKeyboard
 import asyncio
+from db_Project.db_init import db
 
 download_semaphore = asyncio.Semaphore(5)
 send_semaphore = asyncio.Semaphore(2)
@@ -47,7 +48,20 @@ async def close_download_client_no_ssl():
 
 MAX_FILE_SIZE_MB = 20
 
+def get_source(url):
 
+    sources = {
+        "gisomusic.com": "gisomusic",
+        "upmusics.com": "upmusics",
+        "musicsweb.ir": "musicsweb"
+    }
+
+    for domain, name in sources.items():
+
+        if domain in url:
+            return name
+
+    return "unknown"
 
 async def get_remote_file_size_mb(url):
     try:
@@ -137,7 +151,9 @@ async def send_music(
     chat_id,
     url,
     title,
-    artist
+    artist,
+    quality,
+    source = None
 ):
     file_path = None
 
@@ -204,12 +220,29 @@ async def send_music(
         # send audio
         # =========================
 
-        await safe_send_audio(
+        send_message = await safe_send_audio(
             bot,
             chat_id,
             file_path,
             title,
             artist
+        )
+        # =========================
+        # save to DB
+        # =========================
+        source = get_source(url)
+        file_id = send_message.audio.id
+        db.add_music(
+                title=f"{artist} - {title}" if artist else title,
+                quality=quality,
+                file_id=file_id,
+                file_size=int(size *1024 * 1024),
+                source=source,
+                source_url=url
+            )
+        db.increase_download_count(
+            title= f"{artist} - {title}" if artist else title,
+            quality= quality
         )
 
     finally:
@@ -219,3 +252,4 @@ async def send_music(
             os.remove(file_path)
 
             print("File Deleted")
+

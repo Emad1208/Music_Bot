@@ -3,6 +3,7 @@ from balethon.conditions import private
 from balethon.objects import InlineKeyboard
 
 import time
+from datetime import datetime
 from decouple import config
 
 import httpx, io
@@ -17,6 +18,9 @@ from web_scraping.scrape_runner import show_music_results
 from web_scraping.musicsweb import close_client_musicsweb
 from web_scraping.upmusic import close_client_upmusics
 from web_scraping.gisomusic import close_client_gisomusic
+
+from db_Project.db_init import db
+
 
 from .audio_downloader import send_music, close_download_client ,get_remote_file_size_mb,close_download_client_no_ssl
 
@@ -60,6 +64,19 @@ async def safe_answer_callback(callback_query, text=None):
 @bot.on_command(private, name= 'start')
 async def start(*, message):
     user_id = message.author.id
+    username = message.author.username
+    first_name = message.author.first_name
+    last_name = message.author.last_name
+    join_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    db.add_user(
+        user_id=user_id,
+        username=username,
+        first_name=first_name,
+        last_name=last_name,
+        join_date=join_date
+    )
+
     user_state[user_id] = {"state": None}
     await message.reply(
         "*سلام من بازو جستوجوی اهنگ هستم\nاینجام تا اهنگ های تورو پیدا کنم*",
@@ -250,13 +267,27 @@ async def answer_callback_query(callback_query):
                 )
 
                 try:
+                    file_id = db.get_music_file_id(song_name, quality)
+                    if file_id:
+                        await bot.send_audio(
+                            callback_query.message.chat.id,
+                            file_id,
+                            title = song_name,
+                            caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/Y_Music_bot)"
+                        )
+                        print('send audio fron file_id')
+                        db.increase_download_count(song_name, quality)
+                        return
+                    
                     await send_music(
                         bot=bot,
                         chat_id=callback_query.message.chat.id,
                         url=file_url,
                         title=song_name,
-                        artist=""
+                        artist= '',
+                        quality = quality
                     )
+                    print('send audio fron url')
 
                 finally:
                     try:
