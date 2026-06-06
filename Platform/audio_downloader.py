@@ -53,7 +53,8 @@ def get_source(url):
     sources = {
         "gisomusic.com": "gisomusic",
         "upmusics.com": "upmusics",
-        "musicsweb.ir": "musicsweb"
+        "musicsweb.ir": "musicsweb",
+        'musicdel.ir': 'musicdel'
     }
 
     for domain, name in sources.items():
@@ -66,10 +67,7 @@ def get_source(url):
 async def get_remote_file_size_mb(url):
     try:
 
-        verify_ssl = not (
-            "gisomusic.com" in url or
-            "dl.gisomusic.com" in url
-        )
+        verify_ssl = not need_no_ssl(url)
 
         async with httpx.AsyncClient(
             follow_redirects=True,
@@ -105,7 +103,9 @@ def get_local_file_size_mb(file_path):
 
 
 def need_no_ssl(url):
-    return "gisomusic.com" in url
+    return ("gisomusic.com" in url or
+            'musicdel.ir' in url
+            )
 
 
 async def download_music(url, title, artist):

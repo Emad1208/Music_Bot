@@ -18,6 +18,7 @@ from web_scraping.scrape_runner import show_music_results
 from web_scraping.musicsweb import close_client_musicsweb
 from web_scraping.upmusic import close_client_upmusics
 from web_scraping.gisomusic import close_client_gisomusic
+from web_scraping.musicdel import close_client_music_del
 
 from db_Project.db_init import db
 
@@ -345,6 +346,7 @@ def bot_run():
         asyncio.run(close_client_upmusics())
         asyncio.run(close_client_musicsweb())
         asyncio.run(close_client_gisomusic())
+        asyncio.run(close_client_music_del())
         asyncio.run(close_download_client())
         asyncio.run(close_download_client_no_ssl())
     
