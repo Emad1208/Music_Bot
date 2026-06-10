@@ -225,6 +225,13 @@ async def process_search_query_musicsweb(query, client = client, scrape_semaphor
 # link = list(my_dict.values())
 # find_song(link[0])   
 
+# async def test():
+#     result = await process_search_query_musicsweb("نوان")
+#     print(result)
+
+# if __name__ == "__main__":
+#     asyncio.run(test())
+
 
 
 

@@ -2,6 +2,8 @@ from balethon import Client
 from balethon.conditions import private
 from balethon.objects import InlineKeyboard
 
+import traceback
+
 import time
 from datetime import datetime
 from decouple import config
@@ -19,6 +21,7 @@ from web_scraping.musicsweb import close_client_musicsweb
 from web_scraping.upmusic import close_client_upmusics
 from web_scraping.gisomusic import close_client_gisomusic
 from web_scraping.musicdel import close_client_music_del
+from web_scraping.behmelody import close_client_behmelody
 
 from db_Project.db_init import db
 
@@ -147,6 +150,7 @@ async def get_song_name(*, message):
             f"با نام: {user_firstname}\n"
             f"نام کاربری: {user_mame}"
         )
+            print(traceback.format_exc())
             
     
     elif current_state == 'waiting_for_text':
@@ -348,6 +352,7 @@ def bot_run():
         asyncio.run(close_client_gisomusic())
         asyncio.run(close_client_music_del())
         asyncio.run(close_download_client())
+        asyncio.run(close_client_behmelody())
         asyncio.run(close_download_client_no_ssl())
     
 

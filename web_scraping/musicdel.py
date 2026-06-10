@@ -38,7 +38,6 @@ async def search_song(text):
     print(r.status_code)
 
     bs = BeautifulSoup(r.text, 'html.parser')
-    bs = BeautifulSoup(r.text, 'html.parser')
     # print(bs)
     
     page = bs.find('section',class_ = 'resultsec').find_all('figure', class_ = 'result')
