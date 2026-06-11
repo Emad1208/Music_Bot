@@ -72,14 +72,32 @@ async def find_song(url):
     music_one = {}
     qualities = {}
     # print(bs)
-  
-    music_name = bs.find('article', class_ ="behmldy").find('header').find('a').get('title')
+    
+    article = bs.find('article', class_="behmldy")
+    if not article:
+        return {}
+
+    header_link = article.find('header').find('a') if article.find('header') else None
+    if not header_link:
+        return {}
+
+    music_name = header_link.get('title')
+    if not music_name:
+        return {}
+    # music_name = bs.find('article', class_ ="behmldy").find('header').find('a').get('title')
     music_name = remove_stop_words_beh(music_name)
     music_name = re.sub(r'[^\w\s\u0600-\u06FF]', ' ', music_name)
     music_name = re.sub(r'\s+', ' ', music_name).strip()
         
-    page_links = bs.find('div', class_ ="mp3beh mhf").find_all('a')
+    # page_links = bs.find('div', class_ ="mp3beh mhf").find_all('a')
 
+    download_box = bs.find('div', class_="mp3beh mhf")
+    if not download_box:
+        print("download box not found:", url)
+        return {}
+
+    page_links = download_box.find_all('a')
+    
     for link in page_links:
         title = link.get_text(" ", strip=True)
         href = link.get('href')

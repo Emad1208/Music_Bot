@@ -54,7 +54,8 @@ def get_source(url):
         "gisomusic.com": "gisomusic",
         "upmusics.com": "upmusics",
         "musicsweb.ir": "musicsweb",
-        'musicdel.ir': 'musicdel'
+        'musicdel.ir': 'musicdel',
+        'behmelody.in': 'behmelody'
     }
 
     for domain, name in sources.items():

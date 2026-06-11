@@ -302,6 +302,7 @@ async def answer_callback_query(callback_query):
 
         except Exception as e:
             print("Quality Select Error:", e)
+            print(traceback.format_exc())
 
             await callback_query.message.reply("❌ حجم آهنگ بیشتر از محدودیت پلتفرم *بله* میباشد")
 

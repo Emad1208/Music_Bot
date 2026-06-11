@@ -7,20 +7,34 @@ from .behmelody import process_search_query_behmelody
 from Platform.audio_downloader import get_remote_file_size_mb
 import asyncio
 import time
+import re
 import uuid
 from balethon.objects import InlineKeyboard
 
 global_search_query = asyncio.Semaphore(10)
 
+def is_english_query(text):
+    return bool(re.search(r'[a-zA-Z]', text))
+
 async def process_search_query(song):
+    is_english = is_english_query(song)
     async with global_search_query:
-        musics_web, upmusics, gisomusic, music_del, beh_melody = await asyncio.gather(
-            process_search_query_musicsweb(song),
-            process_search_query_upmusics(song),
-            process_search_query_gisomusic(song),
+        if is_english:
+            musics_web = {}
+            upmusics = {}
+            gisomusic = {}
+            music_del, beh_melody = await asyncio.gather(
             process_search_query_musicdel(song),
             process_search_query_behmelody(song)
         )
+        else:
+            musics_web, upmusics, gisomusic, music_del, beh_melody = await asyncio.gather(
+                process_search_query_musicsweb(song),
+                process_search_query_upmusics(song),
+                process_search_query_gisomusic(song),
+                process_search_query_musicdel(song),
+                process_search_query_behmelody(song)
+            )
 
     info_gisomusic = await find_similar_songs(song, gisomusic)
     info_musics_web = await find_similar_songs(song, musics_web)
@@ -28,25 +42,37 @@ async def process_search_query(song):
     info_music_del = await find_similar_songs(song, music_del)
     info_beh_melody = await find_similar_songs(song, beh_melody)
 
-    valid_music_del = await filter_valid_top_results(info_music_del)
-    if valid_music_del:
-        return valid_music_del
-    
-    valid_upmusics = await filter_valid_top_results(info_upmusics)
-    if valid_upmusics:
-        return valid_upmusics
+    if is_english:
 
-    valid_gisomusic = await filter_valid_top_results(info_gisomusic)
-    if valid_gisomusic:
-        return valid_gisomusic
+        valid_music_del = await filter_valid_top_results(info_music_del)
+        if valid_music_del:
+            return valid_music_del
 
-    valid_musics_web = await filter_valid_top_results(info_musics_web)
-    if valid_musics_web:
-        return valid_musics_web
-    
-    valid_beh_melody = await filter_valid_top_results(info_beh_melody)
-    if valid_beh_melody:
-        return valid_beh_melody
+        valid_beh_melody = await filter_valid_top_results(info_beh_melody)
+        if valid_beh_melody:
+            return valid_beh_melody
+
+    else:
+
+        valid_upmusics = await filter_valid_top_results(info_upmusics)
+        if valid_upmusics:
+            return valid_upmusics
+
+        valid_gisomusic = await filter_valid_top_results(info_gisomusic)
+        if valid_gisomusic:
+            return valid_gisomusic
+
+        valid_music_del = await filter_valid_top_results(info_music_del)
+        if valid_music_del:
+            return valid_music_del
+
+        valid_musics_web = await filter_valid_top_results(info_musics_web)
+        if valid_musics_web:
+            return valid_musics_web
+
+        valid_beh_melody = await filter_valid_top_results(info_beh_melody)
+        if valid_beh_melody:
+            return valid_beh_melody
 
     return []
 

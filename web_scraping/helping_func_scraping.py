@@ -19,10 +19,14 @@ def remove_stop_words(text: str) -> str:
     ]
     return " ".join(cleaned_words)
 
-
+STOP_PHRASES_DEL = (
+    'ریمیکس',
+    'از',
+)
 def remove_stop_words_del(text: str) -> str:
-    if "ریمیکس" in text:
-        text = text.replace("ریمیکس", "")
+    for phrase in STOP_PHRASES_DEL:
+        text = text.replace(phrase, "")
+
     words = text.split()
     cleaned_words = [
         word for word in words
@@ -30,24 +34,24 @@ def remove_stop_words_del(text: str) -> str:
     ]
     return " ".join(cleaned_words)
 
+
+STOP_PHRASES_BEH = (
+    "جدید",
+    "متن",
+    "با نام",
+    "شنیدنی",
+    "به نام",
+    "از",
+)
 
 def remove_stop_words_beh(text):
-    if "با نام" in text:
-        text = text.replace("با نام", "")
-    if "شنیدنی" in text:
-        text = text.replace("شنیدنی", "")
-    if "به نام" in text:
-        text = text.replace("به نام", "")
+    for phrase in STOP_PHRASES_BEH:
+        text = text.replace(phrase, "")
 
-    words = text.split()
-
-    cleaned_words = [
-        word for word in words
+    return " ".join(
+        word for word in text.split()
         if word not in STOP_WORDS
-    ]
-
-    return " ".join(cleaned_words)
-
+    )
 
     
 
