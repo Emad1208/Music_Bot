@@ -29,23 +29,73 @@ scrape_semaphore = asyncio.Semaphore(5)
 async def close_client_gisomusic():
     await client.aclose()
 
-async def search_song(text):
-    url = f'https://gisomusic.com/search/{quote(text)}'
+
+def make_giso_urls(query):
+    q_plus = quote(query.replace(" ", "+"), safe="+")
+    q_dash = quote(query.replace(" ", "-"), safe="-")
+
+    words_count = len(query.split())
+
+    if words_count <= 2:
+        return [
+            ("search", f"https://gisomusic.com/search/{q_plus}"),
+            ("tag", f"https://gisomusic.com/tag/{q_dash}/"),
+            ("direct", f"https://gisomusic.com/{q_dash}/"),            
+        ]
+
+    return [
+        ("direct", f"https://gisomusic.com/{q_dash}/"),
+        ("tag", f"https://gisomusic.com/tag/{q_dash}/"),
+        ("search", f"https://gisomusic.com/search/{q_plus}"),
+    ]
+
+async def search_gisomusic(query):
+    urls = make_giso_urls(query)
+
+    for url in urls:
+        result = await search_song(url)
+
+        if result:
+            return result
+
+    return {}
+
+
+async def search_song(url):
     async with scrape_semaphore:
         r = await client.get(url)
-    print(r.status_code)
 
-    bs = BeautifulSoup(r.text, 'html.parser')
-    
-    pages = bs.find('div', class_="gcntr").find_all('article', class_ = "mso_pst")
+    bs = BeautifulSoup(r.text, "html.parser")
+
+    # صفحه پیدا نشد
+    if bs.find("article", class_="g404p"):
+        return None
+
+    container = bs.find("div", class_="gcntr")
+    if not container:
+        return None
+
+    pages = container.find_all("article", class_="mso_pst")
+    if not pages:
+        return None
 
     musics = {}
+
     for a in pages:
-        title = a.find('header').find('a').get_text()
-        link = a.find('p', class_ = 'mk_mcbx').find('a').get('href')
+        title_tag = a.find("header").find("a") if a.find("header") else None
+        link_box = a.find("p", class_="mk_mcbx")
+        link_tag = link_box.find("a") if link_box else None
+
+        if not title_tag or not link_tag:
+            continue
+
+        title = title_tag.get_text(strip=True)
+        link = link_tag.get("href")
+
         if title and link:
             musics[title] = link
-    return musics if musics else None
+
+    return musics or None
 
 
 async def find_song(url):
@@ -84,21 +134,43 @@ async def find_song(url):
 
 
 async def process_search_query_get(query):
-    my_dict = await search_song(query)
-    if not my_dict:
-        return None
-
+    urls = make_giso_urls(query)
     results = {}
-    links = list(my_dict.values())
 
-    tasks = [find_song(link) for link in links]
+    for url_type, url in urls:
 
-    responses = await asyncio.gather(*tasks)
-    for response in responses:
-        if not response:
-            continue
-        results.update(response)
-    return results
+        # صفحه مستقیم آهنگ
+        if url_type == "direct":
+            song_result = await find_song(url)
+
+            if song_result:
+                results.update(song_result)
+                return results
+
+        # صفحه لیست / سرچ / تگ
+        else:
+            my_dict = await search_song(url)
+
+            if not my_dict:
+                continue
+
+            links = list(my_dict.values())
+
+            tasks = [find_song(link) for link in links]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for response in responses:
+                if isinstance(response, Exception):
+                    print("gisomusic find_song error:", response)
+                    continue
+
+                if not response:
+                    continue
+
+                results.update(response)
+            if results:
+                return results
+    return None
 
 
 async def process_search_query_gisomusic(query):
