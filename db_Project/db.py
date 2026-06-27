@@ -99,8 +99,114 @@ class Database:
         )
         """)
 
+
+
+        self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS source_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL UNIQUE,
+
+            avg_download_speed REAL DEFAULT 0,
+            avg_upload_speed REAL DEFAULT 0,
+
+            success_count INTEGER DEFAULT 0,
+            fail_count INTEGER DEFAULT 0,
+
+            success_rate REAL DEFAULT 0,
+
+            last_update DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
         self.con.commit()
 
+
+
+
+    def update_source_stats(self,source, download_speed=None, upload_speed=None, success=True):
+        self.cur.execute("""
+            SELECT avg_download_speed, avg_upload_speed, success_count, fail_count
+            FROM source_stats
+            WHERE source = ?
+        """, (source,))
+
+        row = self.cur.fetchone()
+
+        if row:
+            old_dl, old_up, success_count, fail_count = row
+        else:
+            old_dl, old_up, success_count, fail_count = 0, 0, 0, 0
+
+            self.cur.execute("""
+                INSERT OR IGNORE INTO source_stats (source)
+                VALUES (?)
+            """, (source,))
+
+        if success:
+            success_count += 1
+        else:
+            fail_count += 1
+
+        total = success_count + fail_count
+        success_rate = success_count / total if total else 0
+
+        # میانگین نرم
+        if download_speed is not None:
+            avg_download_speed = download_speed if old_dl == 0 else (old_dl * 0.7 + download_speed * 0.3)
+        else:
+            avg_download_speed = old_dl
+
+        if upload_speed is not None:
+            avg_upload_speed = upload_speed if old_up == 0 else (old_up * 0.7 + upload_speed * 0.3)
+        else:
+            avg_upload_speed = old_up
+
+        self.cur.execute("""
+            UPDATE source_stats
+            SET
+                avg_download_speed = ?,
+                avg_upload_speed = ?,
+                success_count = ?,
+                fail_count = ?,
+                success_rate = ?,
+                last_update = CURRENT_TIMESTAMP
+            WHERE source = ?
+        """, (
+            avg_download_speed,
+            avg_upload_speed,
+            success_count,
+            fail_count,
+            success_rate,
+            source
+        ))
+
+        self.con.commit()
+
+
+
+    def get_source_stat(self,source):
+        self.cur.execute("""
+            SELECT avg_download_speed,
+                avg_upload_speed,
+                success_count,
+                fail_count,
+                success_rate,
+                last_update
+            FROM source_stats
+            WHERE source = ?
+        """, (source,))
+
+        return self.cur.fetchone()
+    
+
+    def get_all_source_stats(self):
+        self.cur.execute("""
+            SELECT source, avg_download_speed, avg_upload_speed,
+                success_count, fail_count, success_rate, last_update
+            FROM source_stats
+            ORDER BY success_rate, avg_download_speed DESC
+        """)
+        return self.cur.fetchall()
+    
 # ---------------------
 # User Funcs
 # ---------------------
@@ -390,6 +496,43 @@ class Database:
 
         return self.cur.fetchone()[0]
 
+    def get_sended_musics_count(self):
+        self.cur.execute("""
+            SELECT COALESCE(SUM(download_count), 0)
+            FROM musics
+        """)
+
+        return self.cur.fetchone()[0]
+
+    def search_musics_grouped_by_title(self, query, limit=5):
+        like_query = f"%{query}%"
+
+        self.cur.execute("""
+            SELECT title, quality, file_id, file_size, source
+            FROM musics
+            WHERE title LIKE ?
+            AND file_id IS NOT NULL
+            ORDER BY download_count DESC
+        """, (like_query,))
+
+        rows = self.cur.fetchall()
+
+        grouped = {}
+
+        for title, quality, file_id, file_size, source in rows:
+            if title not in grouped:
+                grouped[title] = {
+                    "title": title,
+                    "source": source,
+                    "qualities": {}
+                }
+
+            grouped[title]["qualities"][quality] = {
+                "file_id": file_id,
+                "size": round(file_size / (1024 * 1024), 2) if file_size else None
+            }
+
+        return list(grouped.values())[:limit]
 # ---------------------
 # Ads Funcs
 # ---------------------      
@@ -536,6 +679,18 @@ class Database:
         query = """
         SELECT COUNT(*)
         FROM ads
+        """
+
+        self.cur.execute(query)
+
+        return self.cur.fetchone()[0]
+
+
+    def get_active_ads_count(self):
+        query = """
+        SELECT COUNT(*)
+        FROM ads
+        WHERE is_active = 1
         """
 
         self.cur.execute(query)
