@@ -568,27 +568,28 @@ async def finish_msg_buttons(callback_query):
 def make_msg_keyboard(keyboard_json):
     if not keyboard_json:
         return None
-
     raw_buttons = json.loads(keyboard_json)
-
     rows = []
-
     for row in raw_buttons:
         new_row = []
-
         for text, url in row:
+            if url == 'start_menu':
+                new_row.append(
+                InlineKeyboardButton(
+                    text=text,
+                    callback_data = url
+                )
+            )
+                continue
             if not url.startswith(("http://", "https://")):
                 url = "https://" + url
-
             new_row.append(
                 InlineKeyboardButton(
                     text=text,
                     url=url
                 )
             )
-
         rows.append(new_row)
-
     return InlineKeyboard(*rows)
 
 # ---------------------
