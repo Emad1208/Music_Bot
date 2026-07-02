@@ -7,8 +7,8 @@ from db_Project.db_init import db
 from utils.timer import timer
 import time
 
-download_semaphore = asyncio.Semaphore(5)
-send_semaphore = asyncio.Semaphore(2)
+download_semaphore = asyncio.Semaphore(10)
+send_semaphore = asyncio.Semaphore(5)
 headers = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -105,9 +105,17 @@ async def get_remote_file_size_mb(url):
 
 async def safe_get_remote_size(url):
     try:
-        return await asyncio.wait_for(get_remote_file_size_mb(url), timeout=3)
+        return await asyncio.wait_for(
+            get_remote_file_size_mb(url),
+            timeout=3
+        )
+
+    except asyncio.TimeoutError:
+        print("REMOTE_SIZE_TIMEOUT:", url)
+        return None
+
     except Exception as e:
-        print("Remote Size Error:", repr)
+        print("REMOTE_SIZE_ERROR:", repr(e))
         return None
 
 
@@ -186,11 +194,8 @@ async def download_music(url, title, artist, retries=2):
     raise last_error
 
 
-send_semaphore = asyncio.Semaphore(1)
 
 async def safe_send_audio(bot, chat_id, file_path, title, artist):
-    last_error = None
-
     try:
         async with send_semaphore:
             with timer("OPEN_FILE"):
@@ -198,21 +203,34 @@ async def safe_send_audio(bot, chat_id, file_path, title, artist):
 
             try:
                 with timer("BALE_SEND_AUDIO"):
-                    return await bot.send_audio(
-                        chat_id=chat_id,
-                        title=f"{artist}  {title}".strip(),
+                    send_message = await bot.send_audio(
+                        chat_id,
                         audio=audio_file,
+                        title=f"{artist}  {title}".strip(),
                         caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/Y_Music_bot)"
                     )
+                    return send_message
+
+            except Exception as e:
+                print("send audio failed, trying document:", repr(e))
+
+                audio_file.seek(0)
+
+                with timer("BALE_SEND_DOCUMENT"):
+                    send_message = await bot.send_document(
+                        chat_id,
+                        audio_file,
+                        caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/Y_Music_bot)"
+                    )
+                    return send_message
+
             finally:
                 audio_file.close()
 
     except Exception as e:
-        last_error = e
         print("Send audio failed:", repr(e))
         await asyncio.sleep(1)
-
-    raise last_error
+        return None
 
 
 async def send_music(
@@ -230,9 +248,13 @@ async def send_music(
 
     try:
         with timer("REMOTE_SIZE_CHECK"):
+            print(f"CHECK_REMOTE_SIZE: {url}")
             size = await safe_get_remote_size(url)
 
-        if size:
+            if size is None:
+                await bot.send_message(chat_id, "لینک آهنگ پاسخ نداد، لطفاً یک نتیجه دیگر را امتحان کن.")
+                return
+
             print(f"Remote File Size: {size:.2f} MB")
 
             if size > MAX_FILE_SIZE_MB:
@@ -258,11 +280,23 @@ async def send_music(
 
         with timer("DOWNLOAD_FILE"):
             async with download_semaphore:
-                file_path = await download_music(
-                    url=url,
-                    title=title,
-                    artist=artist
-                )
+                try:
+                    file_path = await asyncio.wait_for(
+                        download_music(
+                            url=url,
+                            title=title,
+                            artist=artist
+                        ),
+                        timeout=60
+                    )
+
+                except asyncio.TimeoutError:
+                    print("DOWNLOAD_TIMEOUT:", url)
+                    return
+
+                except Exception as e:
+                    print("DOWNLOAD_ERROR:", repr(e))
+                    return
 
         download_time = time.perf_counter() - download_start
 
@@ -316,6 +350,9 @@ async def send_music(
         # save music + source stats
         # =========================
         with timer("DB_SAVE_FILE_ID"):
+            if send_message is None:
+                print("SEND_MESSAGE_IS_NONE")
+                return
             file_id = send_message.audio.id
 
             db.add_music(

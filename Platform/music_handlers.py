@@ -3,7 +3,7 @@ import traceback
 import time
 from balethon.objects import InlineKeyboard
 
-from dictation.dic_word import only_removing
+from dictation.similar_remove_text import only_removing
 
 from db_Project.db_init import db
 

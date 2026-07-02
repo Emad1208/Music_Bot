@@ -1,7 +1,7 @@
 import time
 import asyncio
 from balethon.objects import InlineKeyboard
-from .bot_state import search_results_cache, CACHE_TTL, CLEANUP_INTERVAL
+from .bot_state import search_results_cache, CACHE_TTL, CLEANUP_INTERVAL,MAX_CHACH_ITEMS
 
 async def start_message(message):
     await message.reply_photo(
@@ -13,19 +13,32 @@ async def start_message(message):
 
 async def cleanup_search_cache():
     print("Cleanup task started")
+
     while True:
-        print("Cleanup running...")
-        now = time.time()
+        try:
+            now = time.time()
 
-        expired_keys = [
-            sid for sid, item in search_results_cache.items()
-            if now - item["created_at"] > CACHE_TTL
-        ]
+            expired_keys = [
+                sid for sid, item in search_results_cache.items()
+                if now - item.get("created_at", 0) > CACHE_TTL
+            ]
 
-        for sid in expired_keys:
-            search_results_cache.pop(sid, None)
+            for sid in expired_keys:
+                search_results_cache.pop(sid, None)
 
-        await asyncio.sleep(CLEANUP_INTERVAL)
+            if len(search_results_cache) > MAX_CHACH_ITEMS:
+                extra_keys = list(search_results_cache.keys())[:-MAX_CHACH_ITEMS]
+                for sid in extra_keys:
+                    search_results_cache.pop(sid, None)
+
+            print("CACHE_SIZE:", len(search_results_cache))
+
+            await asyncio.sleep(CLEANUP_INTERVAL)
+
+        except Exception as e:
+            print("CLEANUP_ERROR:", repr(e))
+            await asyncio.sleep(5)
+
 
 async def safe_answer_callback(callback_query, text=None):
     try:
