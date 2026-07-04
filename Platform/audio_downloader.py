@@ -3,7 +3,7 @@ import uuid
 import httpx
 from balethon.objects import InlineKeyboardButton, InlineKeyboard
 import asyncio
-from db_Project.db_init import db
+from db_Project.db_init import db, word_db
 from utils.timer import timer
 import time
 
@@ -206,7 +206,7 @@ async def safe_send_audio(bot, chat_id, file_path, title, artist):
                     send_message = await bot.send_audio(
                         chat_id,
                         audio=audio_file,
-                        title=f"{artist}  {title}".strip(),
+                        title=title,
                         caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/Y_Music_bot)"
                     )
                     return send_message
@@ -354,6 +354,9 @@ async def send_music(
                 print("SEND_MESSAGE_IS_NONE")
                 return
             file_id = send_message.audio.id
+            print("DB_WORD_SAVE_START")
+            word_db.add_confirmed_music_text(title, source=source)
+            print("DB_WORD_SAVE_DONE!")
 
             db.add_music(
                 title=final_title,

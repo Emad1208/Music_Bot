@@ -5,7 +5,7 @@ from balethon.objects import InlineKeyboard
 
 from dictation.similar_remove_text import only_removing
 
-from db_Project.db_init import db
+from db_Project.db_init import db, word_db
 
 from utils.timer import timer
 
@@ -297,7 +297,9 @@ async def send_cached_music(
             file_id,
             caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/Y_Music_bot)"
         )
-
+    print("DB_WORD_SAVE_START_FROM_DB:", song_name)
+    word_db.add_confirmed_music_text(song_name, source="database")
+    print("DB_WORD_SAVE_DONE_FROM_DB")
     if quality is not None:
         with timer("DB_INCREASE_COUNT"):
             db.increase_download_count(
