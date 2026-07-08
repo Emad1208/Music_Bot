@@ -286,7 +286,7 @@ async def send_cached_music(
                 chat_id,
                 file_id,
                 title=song_name,
-                caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/Y_Music_bot)"
+                caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
             )
 
     except Exception as e:
@@ -295,7 +295,7 @@ async def send_cached_music(
         await bot.send_document(
             chat_id,
             file_id,
-            caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/Y_Music_bot)"
+            caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
         )
     print("DB_WORD_SAVE_START_FROM_DB:", song_name)
     word_db.add_confirmed_music_text(song_name, source="database")

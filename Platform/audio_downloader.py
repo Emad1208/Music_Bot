@@ -207,7 +207,7 @@ async def safe_send_audio(bot, chat_id, file_path, title, artist):
                         chat_id,
                         audio=audio_file,
                         title=title,
-                        caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/Y_Music_bot)"
+                        caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
                     )
                     return send_message
 
@@ -220,7 +220,7 @@ async def safe_send_audio(bot, chat_id, file_path, title, artist):
                     send_message = await bot.send_document(
                         chat_id,
                         audio_file,
-                        caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/Y_Music_bot)"
+                        caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
                     )
                     return send_message
 
