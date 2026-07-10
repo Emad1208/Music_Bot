@@ -6,6 +6,10 @@ import asyncio
 from db_Project.db_init import db, word_db
 from utils.timer import timer
 import time
+from pathlib import Path
+from fprint.paths import FINGERPRINT_DB_PATH
+from fingerprint.wrapper import AudfprintWrapper
+wrapper = AudfprintWrapper()
 
 download_semaphore = asyncio.Semaphore(10)
 send_semaphore = asyncio.Semaphore(5)
@@ -358,7 +362,7 @@ async def send_music(
             word_db.add_confirmed_music_text(title, source=source)
             print("DB_WORD_SAVE_DONE!")
 
-            db.add_music(
+            music_id = db.add_music(
                 title=final_title,
                 quality=quality,
                 file_id=file_id,
@@ -366,6 +370,23 @@ async def send_music(
                 source=source,
                 source_url=url
             )
+
+            if music_id and not db.has_music_fingerprint(music_id):
+                try:
+                    if FINGERPRINT_DB_PATH.exists():
+                        await asyncio.to_thread(wrapper.add_to_db, [file_path])
+                    else:
+                        await asyncio.to_thread(wrapper.create_db, [file_path])
+
+                    track_key = Path(file_path).name
+
+                    db.save_music_fingerprint(
+                        music_id=music_id,
+                        track_key=track_key
+                    )
+
+                except Exception as e:
+                    print("FINGERPRINT_SAVE_ERROR:", repr(e))
 
             db.increase_download_count(
                 title=final_title,

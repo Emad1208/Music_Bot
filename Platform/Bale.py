@@ -7,7 +7,7 @@ from decouple import config
 
 
 import asyncio
-from dictation.dic_word import dictation
+# from dictation.dic_word import dictation
 # from dictation.ai_text import correct_grammar 
 # from dictation.ai_singer_name import dedicate_singer
 
@@ -29,13 +29,14 @@ from commands.send_msg import MSG_CALLBACKS, MSG_DYNAMIC_CALLBACKS
 from commands.state_handler import admin_states, handle_admin_message
 from commands.start import START_CALLBACKS
 from commands.callback_router import handle_start_callback
+from fprint.service import identify_message_audio
 
 from .bot_helpers import start_message, cleanup_search_cache
 from .audio_downloader import close_download_client ,close_download_client_no_ssl
-from .music_handlers import handle_quality_callback, handle_music_callback, handle_song_name
+from .music_handlers import handle_quality_callback, handle_music_callback, handle_song_name, send_cached_music
 
 
-token = config('BALE_BOT_TOKEN') 
+token = config('TEST_BOT') 
 
 bot = Client(token)
 # user_state = {}
@@ -185,16 +186,53 @@ async def handle_message(*, message):
         return
 
     if state == "waiting_for_name":
-        with timer("TOTAL_REQUEST"):
+        with timer("NAME_REQUEST"):
+            if not text:
+                await message.reply("لطفا نام آهنگ یا خواننده را به صورت متن ارسال کنید.")
+                return
+
             await handle_song_name(message,bot)
             return
 
-    elif state == "waiting_for_text":
-        dictated_text = await dictation(text)
-        await message.reply(
-            f"🔍 در حال جستجوی متن آهنگ:\n*{dictated_text}*"
-        )
-        return
+    # elif state == "waiting_for_text":
+    #     dictated_text = await dictation(text)
+    #     await message.reply(
+    #         f"🔍 در حال جستجوی متن آهنگ:\n*{dictated_text}*"
+    #     )
+    #     return
+
+    elif state == "waiting_for_voice":
+        with timer("VOICE_REQUEST"):
+            result = await identify_message_audio(message, bot)
+
+            if result["status"] == "no_audio":
+                await message.reply("لطفا یک فایل صوتی یا ویس ارسال کنید.")
+                return
+
+            if result["status"] == "ffmpeg_missing":
+                print("FINGERPRINT_IDENTIFY_ERROR:", result.get("error"))
+                await message.reply("ffmpeg روی سرور پیدا نشد. تشخیص آهنگ فعلا فعال نیست.")
+                return
+
+            if result["status"] == "error":
+                print("FINGERPRINT_IDENTIFY_ERROR:", result.get("error"))
+                await message.reply("خطا در تشخیص آهنگ. کمی بعد دوباره امتحان کنید.")
+                return
+
+            if not result.get("found"):
+                await message.reply("آهنگ پیدا نشد. یک بخش واضح‌تر از آهنگ را ارسال کنید.")
+                return
+
+            await send_cached_music(
+                bot,
+                chat_id,
+                result["file_id"],
+                result["title"],
+                result["quality"]
+            )
+
+            user_state[user_id]["state"] = None
+            return
 
     elif state is None:
         await message.reply_photo(

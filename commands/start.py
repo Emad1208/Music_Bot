@@ -32,7 +32,7 @@ async def start_waiting_for_voice(callback_query):
     await change_start_state(
         callback_query,
         "waiting_for_voice",
-        "موقتا در دسترس نمیباشد",
+        "لطفا وویس  مورد نظر را ارسال کنید",
         "جستجو با وویس آهنگ"
     )
 

@@ -10,11 +10,12 @@ class Database:
             check_same_thread=False
         )
 
+        self.con.execute("PRAGMA foreign_keys = ON")
+        self.con.execute("PRAGMA journal_mode=WAL")
+
+        self.con.row_factory = sqlite3.Row
         self.cur = self.con.cursor()
 
-        self.con.execute(
-            "PRAGMA journal_mode=WAL"
-        )
 # ---------------------
 # Create Table
 # ---------------------
@@ -117,11 +118,35 @@ class Database:
             last_update DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """)
+
+        self.cur.execute("""
+            CREATE TABLE IF NOT EXISTS music_fingerprints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                music_id INTEGER NOT NULL,
+                engine TEXT NOT NULL DEFAULT 'audfprint',
+                engine_version TEXT,
+                track_key TEXT NOT NULL UNIQUE,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (music_id)
+                    REFERENCES musics(id)
+                    ON DELETE CASCADE,
+
+                UNIQUE(music_id, engine)
+            )
+            """)
+
+        self.cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_music_fingerprints_track_key
+            ON music_fingerprints(track_key)
+            """)
+
+
         self.con.commit()
 
-
-
-
+# ---------------------
+# Source
+# ---------------------
     def update_source_stats(self,source, download_speed=None, upload_speed=None, success=True):
         self.cur.execute("""
             SELECT avg_download_speed, avg_upload_speed, success_count, fail_count
@@ -180,7 +205,6 @@ class Database:
         ))
 
         self.con.commit()
-
 
 
     def get_source_stat(self,source):
@@ -462,6 +486,16 @@ class Database:
         ))
 
         self.con.commit()
+
+        self.cur.execute("""
+            SELECT id
+            FROM musics
+            WHERE title = ?
+            AND quality = ?
+        """, (title, quality))
+
+        row = self.cur.fetchone()
+        return row[0] if row else None
 
 
     def get_all__music_titles(self):
@@ -801,6 +835,44 @@ class Database:
         VALUES (?, ?)
         """, (key, str(value)))
         self.con.commit()
+
+
+# ---------------------
+# FingerPrint Funcs
+# ---------------------  
+    def save_music_fingerprint(self, music_id: int, track_key: str, engine: str = "audfprint"):
+        self.cur.execute("""
+        INSERT OR IGNORE INTO music_fingerprints (
+            music_id,
+            engine,
+            track_key
+        )
+        VALUES (?, ?, ?)
+        """, (music_id, engine, track_key))
+
+        self.con.commit()
+
+    def get_music_by_track_key(self, track_key: str):
+        self.cur.execute("""
+        SELECT m.*
+        FROM musics m
+        JOIN music_fingerprints f
+            ON f.music_id = m.id
+        WHERE f.track_key = ?
+        """, (track_key,))
+
+        return self.cur.fetchone()
+
+
+    def has_music_fingerprint(self, music_id: int, engine: str = "audfprint"):
+        self.cur.execute("""
+        SELECT 1
+        FROM music_fingerprints
+        WHERE music_id = ?
+        AND engine = ?
+        """, (music_id, engine))
+
+        return self.cur.fetchone() is not None
 
 
 # ---------------------
