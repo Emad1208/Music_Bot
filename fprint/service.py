@@ -5,6 +5,7 @@ from pathlib import Path
 
 from db_Project.db_init import db
 from fingerprint.wrapper import AudfprintWrapper
+from fprint.converter import preprocess_sample
 from fprint.paths import BASE_DIR
 
 
@@ -58,6 +59,10 @@ def get_music_value(music, key, index):
         return music[index]
 
 
+async def identify_sample(sample_path):
+    return await asyncio.to_thread(wrapper.identify, sample_path)
+
+
 async def identify_message_audio(message, bot):
     file_id, mime_type = get_audio_file_id(message)
 
@@ -68,12 +73,21 @@ async def identify_message_audio(message, bot):
         }
 
     sample_path = None
+    processed_path = None
 
     try:
         file_bytes = await bot.download(file_id)
         sample_path = save_sample_file(file_bytes, mime_type)
 
-        result = await asyncio.to_thread(wrapper.identify, sample_path)
+        result = await identify_sample(sample_path)
+
+        if not result.get("found"):
+            processed_path = await asyncio.to_thread(preprocess_sample, sample_path)
+            processed_result = await identify_sample(processed_path)
+
+            if processed_result.get("found"):
+                processed_result["preprocessed"] = True
+                result = processed_result
 
         if not result.get("found"):
             return {
@@ -121,5 +135,8 @@ async def identify_message_audio(message, bot):
         }
 
     finally:
+        if processed_path and Path(processed_path).exists():
+            os.remove(processed_path)
+
         if sample_path and Path(sample_path).exists():
             os.remove(sample_path)

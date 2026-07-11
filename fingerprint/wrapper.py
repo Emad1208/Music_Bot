@@ -11,11 +11,34 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 AUDFPRINT_SCRIPT = BASE_DIR / "audfprint" / "audfprint.py"
 AUDFPRINT_DIR = BASE_DIR / "audfprint"
 
+DEFAULT_DENSITY = 50
+DEFAULT_FANOUT = 6
+DEFAULT_MIN_COUNT = 5
+DEFAULT_SEARCH_DEPTH = 200
+MIN_COMMON_HASHES = 8
+
 
 class AudfprintWrapper:
     def __init__(self, db_path: Path = FINGERPRINT_DB_PATH):
         self.db_path = Path(db_path)
         FINGERPRINT_DB_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _analysis_args(self) -> list[str]:
+        return [
+            "--density",
+            str(DEFAULT_DENSITY),
+            "--fanout",
+            str(DEFAULT_FANOUT),
+        ]
+
+    def _match_args(self) -> list[str]:
+        return [
+            *self._analysis_args(),
+            "--min-count",
+            str(DEFAULT_MIN_COUNT),
+            "--search-depth",
+            str(DEFAULT_SEARCH_DEPTH),
+        ]
 
     def _run(self, args: list[str]) -> str:
         if shutil.which("ffmpeg") is None:
@@ -56,6 +79,7 @@ class AudfprintWrapper:
             "new",
             "--dbase",
             str(self.db_path),
+            *self._analysis_args(),
             *files
         ])
 
@@ -66,6 +90,7 @@ class AudfprintWrapper:
             "add",
             "--dbase",
             str(self.db_path),
+            *self._analysis_args(),
             *files
         ])
 
@@ -74,6 +99,7 @@ class AudfprintWrapper:
             "match",
             "--dbase",
             str(self.db_path),
+            *self._match_args(),
             str(Path(sample_file).resolve())
         ])
     
@@ -129,7 +155,7 @@ class AudfprintWrapper:
                 "message": "No match found"
             }
 
-        if result["common_hashes"] < 50:
+        if result["common_hashes"] < MIN_COMMON_HASHES:
             return {
                 "found": False,
                 "message": "Weak match",

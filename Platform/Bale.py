@@ -29,10 +29,11 @@ from commands.send_msg import MSG_CALLBACKS, MSG_DYNAMIC_CALLBACKS
 from commands.state_handler import admin_states, handle_admin_message
 from commands.start import START_CALLBACKS
 from commands.callback_router import handle_start_callback
-from fprint.service import identify_message_audio
+from fprint.service import get_audio_file_id, identify_message_audio
 
 from .bot_helpers import start_message, cleanup_search_cache
 from .audio_downloader import close_download_client ,close_download_client_no_ssl
+from .bot_state import get_user_lock
 from .music_handlers import handle_quality_callback, handle_music_callback, handle_song_name, send_cached_music
 
 
@@ -203,35 +204,63 @@ async def handle_message(*, message):
 
     elif state == "waiting_for_voice":
         with timer("VOICE_REQUEST"):
-            result = await identify_message_audio(message, bot)
+            file_id, _ = get_audio_file_id(message)
 
-            if result["status"] == "no_audio":
+            if not file_id:
                 await message.reply("لطفا یک فایل صوتی یا ویس ارسال کنید.")
                 return
 
-            if result["status"] == "ffmpeg_missing":
-                print("FINGERPRINT_IDENTIFY_ERROR:", result.get("error"))
-                await message.reply("ffmpeg روی سرور پیدا نشد. تشخیص آهنگ فعلا فعال نیست.")
+            if user_state[user_id].get("voice_processing"):
+                await message.reply("⏳ درخواست قبلی شما هنوز در حال پردازش است.")
                 return
 
-            if result["status"] == "error":
-                print("FINGERPRINT_IDENTIFY_ERROR:", result.get("error"))
-                await message.reply("خطا در تشخیص آهنگ. کمی بعد دوباره امتحان کنید.")
+            lock = get_user_lock(user_id)
+
+            if lock.locked():
+                await message.reply("⏳ درخواست قبلی شما هنوز در حال پردازش است.")
                 return
 
-            if not result.get("found"):
-                await message.reply("آهنگ پیدا نشد. یک بخش واضح‌تر از آهنگ را ارسال کنید.")
-                return
+            processing_msg = None
+            user_state[user_id]["voice_processing"] = True
 
-            await send_cached_music(
-                bot,
-                chat_id,
-                result["file_id"],
-                result["title"],
-                result["quality"]
-            )
+            async with lock:
+                try:
+                    processing_msg = await message.reply(
+                        "🎧✨ در حال پردازش ویس ارسالی..."
+                    )
 
-            user_state[user_id]["state"] = None
+                    result = await identify_message_audio(message, bot)
+
+                    if result["status"] == "ffmpeg_missing":
+                        print("FINGERPRINT_IDENTIFY_ERROR:", result.get("error"))
+                        await message.reply("ffmpeg روی سرور پیدا نشد. تشخیص آهنگ فعلا فعال نیست.")
+                        return
+
+                    if result["status"] == "error":
+                        print("FINGERPRINT_IDENTIFY_ERROR:", result.get("error"))
+                        await message.reply("خطا در تشخیص آهنگ. کمی بعد دوباره امتحان کنید.")
+                        return
+
+                    if not result.get("found"):
+                        await message.reply("آهنگ پیدا نشد. یک بخش واضح‌تر از آهنگ را ارسال کنید.")
+                        return
+
+                    await send_cached_music(
+                        bot,
+                        chat_id,
+                        result["file_id"],
+                        result["title"],
+                        result["quality"]
+                    )
+
+                finally:
+                    if processing_msg:
+                        try:
+                            await processing_msg.delete()
+                        except Exception as e:
+                            print("delete voice processing message failed:", e)
+                    user_state[user_id]["voice_processing"] = False
+
             return
 
     elif state is None:
