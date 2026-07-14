@@ -29,6 +29,12 @@ from commands.send_msg import MSG_CALLBACKS, MSG_DYNAMIC_CALLBACKS
 from commands.state_handler import admin_states, handle_admin_message
 from commands.start import START_CALLBACKS
 from commands.callback_router import handle_start_callback
+from commands.channel import (
+    channel_command,
+    ensure_required_channel_membership,
+    handle_channel_callback,
+    is_channel_setup_state,
+)
 from fprint.service import get_audio_file_id, identify_message_audio
 
 from .bot_helpers import start_message, cleanup_search_cache
@@ -65,6 +71,9 @@ async def start(*, message):
     )
 
     user_state[user_id] = {"state": None}
+    if not await ensure_required_channel_membership(message):
+        return
+
     await start_message(message)
 
      
@@ -74,6 +83,10 @@ async def advertizing(*, message):
 
     if not db.is_admin(user_id):
         await message.reply('you are not an admin \nplease send others commands')
+        return
+
+
+    if not await ensure_required_channel_membership(message):
         return
 
     init_user_state(user_id)
@@ -103,6 +116,10 @@ async def admin(*, message):
         )
         return
 
+
+    if not await ensure_required_channel_membership(message):
+        return
+
     init_user_state(user_id)
     user_state[user_id]["state"] = None
 
@@ -129,6 +146,10 @@ async def admin(*, message):
         )
         return
 
+
+    if not await ensure_required_channel_membership(message):
+        return
+
     init_user_state(user_id)
     user_state[user_id]["state"] = None
 
@@ -145,8 +166,16 @@ async def admin(*, message):
     )
 
 
+@bot.on_command(private, name="channel")
+async def channel(*, message):
+    await channel_command(message)
+
+
 @bot.on_command(private, name="help")
 async def help_command(*, message):
+    if not await ensure_required_channel_membership(message):
+        return
+
     await message.reply("برای ارتباط با ادمین به ایدی زیر پیام بدید:\n@emad")
 
 
@@ -158,6 +187,10 @@ async def report_command(*, message):
         await message.reply(
             "شما دسترسی به این بخش را ندارید."
         )
+        return
+
+
+    if not await ensure_required_channel_membership(message):
         return
 
     await message.reply(
@@ -183,7 +216,16 @@ async def handle_message(*, message):
     print(f"User ID: {user_id} | State: {state}")
 
     if state in admin_states:
+        if (
+            not is_channel_setup_state(state)
+            and not await ensure_required_channel_membership(message)
+        ):
+            return
+
         await handle_admin_message(message)
+        return
+
+    if not await ensure_required_channel_membership(message):
         return
 
     if state == "waiting_for_name":
@@ -280,6 +322,12 @@ async def answer_callback_query(callback_query):
     user_id = callback_query.author.id
 
     user_state.setdefault(user_id, {"state": None})
+
+    if await handle_channel_callback(callback_query):
+        return
+
+    if not await ensure_required_channel_membership(callback_query):
+        return
 
     # music result callbacks
     if data.startswith("music:"):

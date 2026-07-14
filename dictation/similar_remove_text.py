@@ -196,7 +196,7 @@ def remove_stop_words(text: str) -> str:
 #         song_dict: A dictionary where keys are song names and values are their URLs.
 #         similarity_threshold: The minimum similarity percentage (0-100) to consider a match.
 
-async def find_similar_songs(user_input: str, song_dict: dict, similarity_threshold: int = 45) -> list[dict]:
+async def find_similar_songs(user_input: str, song_dict: dict, similarity_threshold: int = 70) -> list[dict]:
     matched_links = []
 
     if not song_dict:

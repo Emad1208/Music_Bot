@@ -18,6 +18,7 @@ from .msg_admin import (
     receive_button_url_msg,
     receive_target_user,
 )
+from .channel import CHANNEL_ADMIN_HANDLERS
 from db_Project.db_init import db
 
 
@@ -37,6 +38,8 @@ ADMIN_HANDLERS = {
     "waiting_msg_button_name": receive_button_name_msg,
     "waiting_msg_button_url": receive_button_url_msg,
     "waiting_target_user": receive_target_user,
+
+    **CHANNEL_ADMIN_HANDLERS,
 }
 
 admin_states = set(ADMIN_HANDLERS.keys())
