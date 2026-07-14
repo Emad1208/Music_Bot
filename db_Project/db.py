@@ -47,6 +47,15 @@ class Database:
         """)
 
         self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS "fa-en_musics" (
+            en_artist TEXT,
+            fa_artist TEXT,
+            en_title TEXT,
+            fa_title TEXT
+        )
+        """)
+
+        self.cur.execute("""
         CREATE TABLE IF NOT EXISTS ads (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
@@ -99,6 +108,33 @@ class Database:
             value TEXT
         )
         """)
+
+        self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS required_channels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            username TEXT NOT NULL,
+            channel_id INTEGER NOT NULL UNIQUE,
+            created_by INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        required_channel_columns = {
+            row[1]
+            for row in self.cur.execute(
+                "PRAGMA table_info(required_channels)"
+            ).fetchall()
+        }
+        if "username" not in required_channel_columns:
+            self.cur.execute(
+                "ALTER TABLE required_channels ADD COLUMN username TEXT"
+            )
+            self.cur.execute("""
+            UPDATE required_channels
+            SET username = name
+            WHERE username IS NULL OR username = ''
+            """)
 
 
 
@@ -455,6 +491,26 @@ class Database:
 # ---------------------
 # Music Funcs
 # ---------------------
+    def add_fa_en_music(self, en_artist, fa_artist, en_title, fa_title):
+        self.cur.execute("""
+            INSERT INTO "fa-en_musics"
+            (en_artist, fa_artist, en_title, fa_title)
+            VALUES (?, ?, ?, ?)
+        """, (en_artist, fa_artist, en_title, fa_title))
+
+        self.con.commit()
+        return self.cur.lastrowid
+
+
+    def get_fa_en_musics(self):
+        self.cur.execute("""
+            SELECT en_artist, fa_artist, en_title, fa_title
+            FROM "fa-en_musics"
+        """)
+
+        return self.cur.fetchall()
+
+
     def get_music_file_id(self, title, quality):
         self.cur.execute("""
             SELECT file_id
@@ -820,6 +876,50 @@ class Database:
 # ---------------------
 # Setting Funcs
 # ---------------------  
+    def add_required_channel(self, name, username, channel_id, created_by):
+        self.cur.execute("""
+        SELECT 1
+        FROM required_channels
+        WHERE LOWER(username) = LOWER(?)
+        """, (username,))
+        if self.cur.fetchone():
+            raise sqlite3.IntegrityError("channel username already exists")
+
+        self.cur.execute("""
+        INSERT INTO required_channels (name, username, channel_id, created_by)
+        VALUES (?, ?, ?, ?)
+        """, (name, username, channel_id, created_by))
+        self.con.commit()
+        return self.cur.lastrowid
+
+
+    def get_required_channels(self):
+        self.cur.execute("""
+        SELECT id, name, username, channel_id, created_by, created_at
+        FROM required_channels
+        ORDER BY id DESC
+        """)
+        return self.cur.fetchall()
+
+
+    def get_required_channel_by_id(self, required_channel_id):
+        self.cur.execute("""
+        SELECT id, name, username, channel_id, created_by, created_at
+        FROM required_channels
+        WHERE id = ?
+        """, (required_channel_id,))
+        return self.cur.fetchone()
+
+
+    def delete_required_channel(self, required_channel_id):
+        self.cur.execute(
+            "DELETE FROM required_channels WHERE id = ?",
+            (required_channel_id,)
+        )
+        self.con.commit()
+        return self.cur.rowcount
+
+
     def get_setting(self, key, default=None):
         self.cur.execute(
             "SELECT value FROM bot_settings WHERE key = ?",
