@@ -3,7 +3,7 @@ from pathlib import PurePosixPath
 from urllib.parse import unquote, urlparse
 
 from .client import SpotifyClient
-from .matching import search_tokens, token_coverage_score
+from .matching import clean_spotify_title, search_tokens, token_coverage_score
 
 
 spotify_client = SpotifyClient()
@@ -44,6 +44,10 @@ async def get_spotify_download_metadata(title, download_url=""):
             return metadata
 
     return None
+
+
+def get_download_filename_phrase(download_url):
+    return _download_filename_query(download_url)
 
 
 def _select_track(tracks, query):
@@ -126,7 +130,7 @@ def _download_filename_query(download_url):
         filename,
         flags=re.IGNORECASE,
     )
-    filename = re.sub(r"\s+", " ", filename).strip()
+    filename = clean_spotify_title(filename)
 
     if not re.search(r"[A-Za-z]", filename):
         return ""

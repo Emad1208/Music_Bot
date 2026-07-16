@@ -287,12 +287,14 @@ class WordDatabase:
             })
             return False
 
-        if fa_word_count != en_word_count:
-            print("EN/FA PHRASE SAVE SKIPPED: word count mismatch", {
+        word_count_difference = abs(fa_word_count - en_word_count)
+        if word_count_difference > 1:
+            print("EN/FA PHRASE SAVE SKIPPED: word count difference too large", {
                 "fa_phrase": fa_phrase,
                 "fa_word_count": fa_word_count,
                 "en_phrase": en_phrase,
                 "en_word_count": en_word_count,
+                "difference": word_count_difference,
             })
             return False
 

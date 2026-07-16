@@ -99,6 +99,10 @@ def clean_spotify_title(title):
     if not title:
         return ""
 
+    # Apostrophes are often transliteration marks inside one word (for example
+    # Ta'ane). Removing them must not split the title into extra words.
+    title = re.sub(r"(?<=\w)['\u2019](?=\w)", "", title)
+
     version_pattern = "|".join(
         re.escape(word)
         for word in sorted(VERSION_WORDS, key=len, reverse=True)
@@ -139,10 +143,11 @@ def search_tokens(text):
         for character in normalized
         if not unicodedata.combining(character)
     )
+    normalized = re.sub(r"(?<=[a-z0-9])['\u2019](?=[a-z0-9])", "", normalized)
     return [
         token
         for token in re.findall(r"[a-z0-9]+", normalized)
-        if len(token) > 1
+        if len(token) > 1 or token.isalpha()
     ]
 
 

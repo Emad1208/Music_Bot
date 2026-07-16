@@ -6,7 +6,10 @@ from balethon.objects import InlineKeyboard
 from dictation.similar_remove_text import only_removing
 
 from db_Project.db_init import db, word_db
-from spotify_service import get_spotify_download_metadata
+from spotify_service import (
+    get_download_filename_phrase,
+    get_spotify_download_metadata,
+)
 
 from utils.timer import timer
 
@@ -287,6 +290,17 @@ async def save_spotify_download_metadata(song_name, file_url=""):
             )
 
         if not spotify_metadata:
+            english_phrase = get_download_filename_phrase(file_url)
+            if english_phrase and word_db.add_en_fa_phrase(
+                song_name,
+                english_phrase,
+            ):
+                print("DOWNLOAD FILENAME PHRASE SAVED:", {
+                    "fa_phrase": song_name,
+                    "en_phrase": english_phrase,
+                })
+                return True
+
             print("SPOTIFY DOWNLOAD METADATA: no reliable result -> save skipped")
             return False
 
