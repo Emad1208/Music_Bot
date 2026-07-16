@@ -47,15 +47,6 @@ class Database:
         """)
 
         self.cur.execute("""
-        CREATE TABLE IF NOT EXISTS "fa-en_musics" (
-            en_artist TEXT,
-            fa_artist TEXT,
-            en_title TEXT,
-            fa_title TEXT
-        )
-        """)
-
-        self.cur.execute("""
         CREATE TABLE IF NOT EXISTS ads (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
@@ -491,26 +482,6 @@ class Database:
 # ---------------------
 # Music Funcs
 # ---------------------
-    def add_fa_en_music(self, en_artist, fa_artist, en_title, fa_title):
-        self.cur.execute("""
-            INSERT INTO "fa-en_musics"
-            (en_artist, fa_artist, en_title, fa_title)
-            VALUES (?, ?, ?, ?)
-        """, (en_artist, fa_artist, en_title, fa_title))
-
-        self.con.commit()
-        return self.cur.lastrowid
-
-
-    def get_fa_en_musics(self):
-        self.cur.execute("""
-            SELECT en_artist, fa_artist, en_title, fa_title
-            FROM "fa-en_musics"
-        """)
-
-        return self.cur.fetchall()
-
-
     def get_music_file_id(self, title, quality):
         self.cur.execute("""
             SELECT file_id
@@ -598,7 +569,7 @@ class Database:
         like_query = f"%{query}%"
 
         self.cur.execute("""
-            SELECT title, quality, file_id, file_size, source
+            SELECT title, quality, file_id, file_size, source, source_url
             FROM musics
             WHERE title LIKE ?
             AND file_id IS NOT NULL
@@ -609,7 +580,7 @@ class Database:
 
         grouped = {}
 
-        for title, quality, file_id, file_size, source in rows:
+        for title, quality, file_id, file_size, source, source_url in rows:
             if title not in grouped:
                 grouped[title] = {
                     "title": title,
@@ -619,7 +590,8 @@ class Database:
 
             grouped[title]["qualities"][quality] = {
                 "file_id": file_id,
-                "size": round(file_size / (1024 * 1024), 2) if file_size else None
+                "size": round(file_size / (1024 * 1024), 2) if file_size else None,
+                "url": source_url,
             }
 
         return list(grouped.values())[:limit]

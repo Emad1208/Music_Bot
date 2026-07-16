@@ -6,6 +6,7 @@ from balethon.objects import InlineKeyboard
 from dictation.similar_remove_text import only_removing
 
 from db_Project.db_init import db, word_db
+from spotify_service import get_spotify_download_metadata
 
 from utils.timer import timer
 
@@ -163,6 +164,8 @@ async def handle_quality_callback(callback_query, bot):
         await callback_query.message.reply("⏳ درخواست قبلی شما هنوز در حال پردازش است.")
         return
 
+    await lock.acquire()
+
     try:
         _, search_id, index, quality = data.split(":")
         index = int(index)
@@ -194,12 +197,42 @@ async def handle_quality_callback(callback_query, bot):
             return
 
         file_id = quality_info.get("file_id")
+        file_url = quality_info.get("url")
+
+        if not file_id and not file_url:
+            await callback_query.message.reply("❌ لینک یا فایل این آهنگ موجود نیست.")
+            return
+
+        await save_spotify_download_metadata(song_name, file_url)
 
         if file_id:
-            async with lock:
-                with timer("SEND_AD"):
-                    await send_ad_before_music(bot, chat_id)
+            with timer("SEND_AD"):
+                await send_ad_before_music(bot, chat_id)
 
+            await send_cached_music(
+                bot,
+                chat_id,
+                file_id,
+                song_name,
+                quality
+            )
+
+            return
+
+        loading_msg = None
+
+        try:
+            with timer("SEND_AD"):
+                await send_ad_before_music(bot, chat_id)
+
+            loading_msg = await callback_query.message.reply(
+                f"⏳ در حال آماده‌سازی آهنگ با کیفیت {quality}..."
+            )
+
+            with timer("DB_GET_FILE_ID"):
+                file_id = db.get_music_file_id(song_name, quality)
+
+            if file_id:
                 await send_cached_music(
                     bot,
                     chat_id,
@@ -208,58 +241,26 @@ async def handle_quality_callback(callback_query, bot):
                     quality
                 )
 
-            return
+                return
 
-        file_url = quality_info.get("url")
-
-        if not file_url:
-            await callback_query.message.reply("❌ لینک یا فایل این آهنگ موجود نیست.")
-            return
-        
-
-        async with lock:
-            loading_msg = None
-
-            try:
-                with timer("SEND_AD"):
-                    await send_ad_before_music(bot, chat_id)
-
-                loading_msg = await callback_query.message.reply(
-                    f"⏳ در حال آماده‌سازی آهنگ با کیفیت {quality}..."
+            with timer("SEND_FROM_URL"):
+                await send_music(
+                    bot=bot,
+                    chat_id=chat_id,
+                    url=file_url,
+                    title=song_name,
+                    artist="",
+                    quality=quality
                 )
 
-                with timer("DB_GET_FILE_ID"):
-                    file_id = db.get_music_file_id(song_name, quality)
+            print("send audio from url")
 
-                if file_id:
-                    await send_cached_music(
-                        bot,
-                        chat_id,
-                        file_id,
-                        song_name,
-                        quality
-                    )
-
-                    return
-
-                with timer("SEND_FROM_URL"):
-                    await send_music(
-                        bot=bot,
-                        chat_id=chat_id,
-                        url=file_url,
-                        title=song_name,
-                        artist="",
-                        quality=quality
-                    )
-
-                print("send audio from url")
-
-            finally:
-                if loading_msg:
-                    try:
-                        await loading_msg.delete()
-                    except Exception as e:
-                        print("delete loading message failed:", e)
+        finally:
+            if loading_msg:
+                try:
+                    await loading_msg.delete()
+                except Exception as e:
+                    print("delete loading message failed:", e)
 
     except httpx.ConnectTimeout:
         await callback_query.message.reply("❌ اتصال به سرور دانلود برقرار نشد. دوباره تلاش کن.")
@@ -271,6 +272,32 @@ async def handle_quality_callback(callback_query, bot):
         print("Quality Select Error:", e)
         print(traceback.format_exc())
         await callback_query.message.reply("❌ خطا در آماده‌سازی یا ارسال آهنگ.")
+
+    finally:
+        if lock.locked():
+            lock.release()
+
+
+async def save_spotify_download_metadata(song_name, file_url=""):
+    try:
+        with timer("SPOTIFY_DOWNLOAD_METADATA_SEARCH"):
+            spotify_metadata = await get_spotify_download_metadata(
+                song_name,
+                file_url,
+            )
+
+        if not spotify_metadata:
+            print("SPOTIFY DOWNLOAD METADATA: no reliable result -> save skipped")
+            return False
+
+        print("SPOTIFY DOWNLOAD METADATA:", spotify_metadata)
+        return word_db.save_spotify_metadata(
+            spotify_metadata,
+            downloaded_title=song_name,
+        )
+    except Exception as e:
+        print("SPOTIFY DOWNLOAD METADATA ERROR:", repr(e))
+        return False
 
 
 async def send_cached_music(
