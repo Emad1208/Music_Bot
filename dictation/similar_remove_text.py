@@ -196,37 +196,28 @@ def remove_stop_words(text: str) -> str:
 #         song_dict: A dictionary where keys are song names and values are their URLs.
 #         similarity_threshold: The minimum similarity percentage (0-100) to consider a match.
 
+def calculate_similarity_score(user_input: str, song_name: str) -> float:
+    """Return a normalized fuzzy-match score in the inclusive range 0..100."""
+    normalized_input = remove_stop_words(normalize_text(user_input))
+    normalized_song_name = remove_stop_words(normalize_text(song_name))
+
+    if not normalized_input or not normalized_song_name:
+        return 0.0
+
+    # WRatio combines whole-text, partial and token-based comparisons while
+    # always returning a normalized score between 0 and 100.
+    score = fuzz.WRatio(normalized_input, normalized_song_name)
+    return round(max(0.0, min(100.0, float(score))), 2)
+
+
 async def find_similar_songs(user_input: str, song_dict: dict, similarity_threshold: int = 70) -> list[dict]:
     matched_links = []
 
     if not song_dict:
         return matched_links
 
-    user_words = user_input.lower().split()
-    main_word = user_words[-1] if user_words else ""
-
     for song_name, song_data in song_dict.items():
-        song_name_lower = song_name.lower()
-        song_words = song_name_lower.split()
-
-        scores = []
-
-        for u_word in user_words:
-            best = max(
-                (fuzz.ratio(u_word, s_word) for s_word in song_words),
-                default=0
-            )
-            scores.append(best)
-
-        similarity = sum(scores) / len(scores) if scores else 0
-
-        # امتیاز ویژه برای کلمه اصلی، مثل "قطار"
-        if main_word and main_word in song_name_lower:
-            similarity += 40
-
-        # امتیاز برای تعداد کلمات مشترک
-        common_words = set(user_words) & set(song_words)
-        similarity += len(common_words) * 10
+        similarity = calculate_similarity_score(user_input, song_name)
 
         if similarity >= similarity_threshold:
             matched_links.append({

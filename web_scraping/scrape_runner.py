@@ -6,7 +6,6 @@ from .musicdel import process_search_query_musicdel
 from .behmelody import process_search_query_behmelody
 from Platform.audio_downloader import safe_get_remote_size
 from utils.timer import timer
-from utils.priority_artists import should_prioritize_giso
 from decouple import config
 import asyncio
 import time
@@ -31,6 +30,8 @@ except ValueError:
     DB_RESULT_THRESHOLD = 4
 
 global_search_query = asyncio.Semaphore(5)
+MAX_SCRAPED_RESULTS = 10
+INITIAL_VISIBLE_RESULTS = 5
 
 def detect_query_lang(text):
     fa_count = len(re.findall(r'[\u0600-\u06FF]', text))
@@ -124,79 +125,47 @@ async def process_search_query(song):
             info_beh_melody = await find_similar_songs(song, beh_melody)
             mem("AFTER_SIMILAR_BEHMELODY")
 
-        if is_english:
-            valid_music_del = await safe_filter("MUSIC_DEL", info_music_del)
-            if valid_music_del:
-                del musics_web, upmusics, gisomusic, music_del, beh_melody
-                del info_gisomusic, info_musics_web, info_upmusics, info_music_del, info_beh_melody
-                gc.collect()
-                mem("BEFORE_RETURN_MUSIC_DEL")
-                return valid_music_del
+        all_results = []
+        for source_results in (
+            info_gisomusic,
+            info_musics_web,
+            info_upmusics,
+            info_music_del,
+            info_beh_melody,
+        ):
+            all_results.extend(source_results)
 
-            valid_beh_melody = await safe_filter("BEHMELODY", info_beh_melody)
-            if valid_beh_melody:
-                del musics_web, upmusics, gisomusic, music_del, beh_melody
-                del info_gisomusic, info_musics_web, info_upmusics, info_music_del, info_beh_melody
-                gc.collect()
-                mem("BEFORE_RETURN_BEH_MELODY")
-                return valid_beh_melody
+        # Keep duplicate songs from different sites and rank every result
+        # globally by its normalized similarity score.
+        all_results.sort(
+            key=lambda item: item.get("similarity", 0),
+            reverse=True,
+        )
+        mem("AFTER_GLOBAL_SIMILARITY_SORT")
 
-        else:
-            if should_prioritize_giso(song):
-                valid_gisomusic = await safe_filter("GISOMUSIC", info_gisomusic)
-                if valid_gisomusic:
-                    del musics_web, upmusics, gisomusic, music_del, beh_melody
-                    del info_gisomusic, info_musics_web, info_upmusics, info_music_del, info_beh_melody
-                    gc.collect()
-                    mem("BEFORE_RETURN_GISO_MUSIC")
-                    return valid_gisomusic
-                
-            valid_upmusics = await safe_filter("UPMUSICS", info_upmusics)
-            if valid_upmusics:
-                del musics_web, upmusics, gisomusic, music_del, beh_melody
-                del info_gisomusic, info_musics_web, info_upmusics, info_music_del, info_beh_melody
-                gc.collect()
-                mem("BEFORE_RETURN_UPMUSICS")
-                return valid_upmusics
+        valid_results = await safe_filter("ALL_SOURCES", all_results)
 
-            valid_music_del = await safe_filter("MUSIC_DEL", info_music_del)
-            if valid_music_del:
-                del musics_web, upmusics, gisomusic, music_del, beh_melody
-                del info_gisomusic, info_musics_web, info_upmusics, info_music_del, info_beh_melody
-                gc.collect()
-                mem("BEFORE_RETURN_MUSIC_DEL")
-                return valid_music_del
-
-            valid_beh_melody = await safe_filter("BEHMELODY", info_beh_melody)
-            if valid_beh_melody:
-                del musics_web, upmusics, gisomusic, music_del, beh_melody
-                del info_gisomusic, info_musics_web, info_upmusics, info_music_del, info_beh_melody
-                gc.collect()
-                mem("BEFORE_RETURN_BEH_MELODY")
-                return valid_beh_melody
-
-            valid_musics_web = await safe_filter("MUSICS_WEB", info_musics_web)
-            if valid_musics_web:
-                del musics_web, upmusics, gisomusic, music_del, beh_melody
-                del info_gisomusic, info_musics_web, info_upmusics, info_music_del, info_beh_melody
-                gc.collect()
-                mem("BEFORE_RETURN_MUSICS_WEB")
-                return valid_musics_web
-            
     del musics_web, upmusics, gisomusic, music_del, beh_melody
     del info_gisomusic, info_musics_web, info_upmusics, info_music_del, info_beh_melody
+    del all_results
     gc.collect()
-    mem("BEFORE_RETURN_EMPTY")
-    return []
+    mem("BEFORE_RETURN_ALL_SOURCES")
+    return valid_results
 
 
-async def filter_valid_top_results(results, limit=3, scan_limit=5):
+async def filter_valid_top_results(
+    results,
+    limit=MAX_SCRAPED_RESULTS,
+    scan_limit=None,
+):
     if not results:
         return []
 
     valid_results = []
 
-    for item in results[:scan_limit]:
+    candidates = results if scan_limit is None else results[:scan_limit]
+
+    for item in candidates:
         qualities = item.get("qualities", {})
 
         tasks = []
@@ -265,7 +234,8 @@ async def show_music_results(message, song, search_results_cache):
         await message.reply("موردی پیدا نشد!")
         return
 
-    top_results = music_info[:5]
+    top_results = music_info[:MAX_SCRAPED_RESULTS]
+    visible_results = top_results[:INITIAL_VISIBLE_RESULTS]
     del music_info
     gc.collect()
     mem("AFTER_DELETE_MUSIC_INFO")
@@ -283,7 +253,7 @@ async def show_music_results(message, song, search_results_cache):
 
     buttons = []
 
-    for index, item in enumerate(top_results):
+    for index, item in enumerate(visible_results):
         button_text = item["name"][:60]
         callback_data = f"music:{search_id}:{index}"
         buttons.append([(button_text, callback_data)])
@@ -292,8 +262,6 @@ async def show_music_results(message, song, search_results_cache):
         "یکی از گزینه‌های زیر را انتخاب کنید:",
         InlineKeyboard(*buttons)
     )
-
-
 async def show_db_music_results(message, song, db_results, search_results_cache):
     search_id = str(uuid.uuid4())
 
