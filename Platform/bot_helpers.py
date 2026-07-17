@@ -8,7 +8,7 @@ async def start_message(message):
         photo="962702339:4828745907524804352:1:b7c446456bf8441a235106a73ab1502f73cdff128ed015e7291f2cbfc7f65ac7ead8ed3beed053ae3c7b7805ace94705",
         reply_markup=InlineKeyboard(
             [('جستوجو با اسم اهنگ و خواننده', 'waiting_for_name')],
-             [('جستوجو ارسال ویس', 'waiting_for_voice')]
+             [('جستوجو با ارسال ویس', 'waiting_for_voice')]
         )
     )
 

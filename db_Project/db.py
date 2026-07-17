@@ -912,17 +912,33 @@ class Database:
 # ---------------------
 # FingerPrint Funcs
 # ---------------------  
-    def save_music_fingerprint(self, music_id: int, track_key: str, engine: str = "audfprint"):
-        self.cur.execute("""
-        INSERT OR IGNORE INTO music_fingerprints (
-            music_id,
-            engine,
-            track_key
-        )
-        VALUES (?, ?, ?)
-        """, (music_id, engine, track_key))
-
-        self.con.commit()
+    def save_music_fingerprint(
+        self,
+        music_id: int,
+        track_key: str,
+        engine: str = "audfprint",
+        engine_version: str | None = None,
+    ):
+        try:
+            self.cur.execute("""
+            INSERT INTO music_fingerprints (
+                music_id,
+                engine,
+                engine_version,
+                track_key
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(music_id, engine) DO UPDATE SET
+                track_key = excluded.track_key,
+                engine_version = COALESCE(
+                    excluded.engine_version,
+                    music_fingerprints.engine_version
+                )
+            """, (music_id, engine, engine_version, track_key))
+            self.con.commit()
+        except Exception:
+            self.con.rollback()
+            raise
 
     def get_music_by_track_key(self, track_key: str):
         self.cur.execute("""

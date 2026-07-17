@@ -5,7 +5,8 @@ import os
 import re
 import shutil
 
-from fprint.paths import FINGERPRINT_DB_PATH, FINGERPRINT_DB_DIR
+from fprint.paths import FINGERPRINT_DB_PATH
+from fingerprint.storage import FingerprintDatabaseStorage
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 AUDFPRINT_SCRIPT = BASE_DIR / "audfprint" / "audfprint.py"
@@ -20,8 +21,8 @@ MIN_COMMON_HASHES = 8
 
 class AudfprintWrapper:
     def __init__(self, db_path: Path = FINGERPRINT_DB_PATH):
-        self.db_path = Path(db_path)
-        FINGERPRINT_DB_DIR.mkdir(parents=True, exist_ok=True)
+        self.db_path = Path(db_path).resolve()
+        self.storage = FingerprintDatabaseStorage(self.db_path)
 
     def _analysis_args(self) -> list[str]:
         return [
@@ -40,8 +41,14 @@ class AudfprintWrapper:
             str(DEFAULT_SEARCH_DEPTH),
         ]
 
-    def _run(self, args: list[str]) -> str:
-        if shutil.which("ffmpeg") is None:
+    def _run(
+        self,
+        args: list[str],
+        *,
+        require_ffmpeg: bool = True,
+        discard_stdout: bool = False,
+    ) -> str:
+        if require_ffmpeg and shutil.which("ffmpeg") is None:
             raise RuntimeError(
                 "ffmpeg not found. Install ffmpeg and make sure it is available in PATH."
             )
@@ -53,46 +60,188 @@ class AudfprintWrapper:
         ]
 
         result = subprocess.run(
-        command,
-        cwd=str(AUDFPRINT_DIR),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env={
-            **os.environ,
-            "PYTHONIOENCODING": "utf-8"
-        }
-    )
+            command,
+            cwd=str(AUDFPRINT_DIR),
+            stdout=subprocess.DEVNULL if discard_stdout else subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={
+                **os.environ,
+                "PYTHONIOENCODING": "utf-8"
+            }
+        )
 
         if result.returncode != 0:
             raise RuntimeError(
-                f"Audfprint error:\n{result.stderr}\n{result.stdout}"
+                f"Audfprint error:\n{result.stderr}\n{result.stdout or ''}"
             )
 
-        return result.stdout.strip()
+        return (result.stdout or "").strip()
 
-    def create_db(self, audio_files: list[str | Path]) -> str:
+    def _write_database(
+        self,
+        audio_files: list[str | Path],
+        *,
+        mode: str,
+        track_keys: list[str] | None = None,
+    ) -> str:
         files = [str(Path(file).resolve()) for file in audio_files]
+        if not files:
+            raise ValueError("At least one audio file is required")
 
-        return self._run([
-            "new",
-            "--dbase",
-            str(self.db_path),
-            *self._analysis_args(),
-            *files
-        ])
+        for file in files:
+            if not Path(file).is_file():
+                raise FileNotFoundError(file)
 
-    def add_to_db(self, audio_files: list[str | Path]) -> str:
-        files = [str(Path(file).resolve()) for file in audio_files]
+        if track_keys is not None:
+            if len(track_keys) != len(files):
+                raise ValueError("track_keys must match the number of audio files")
+            for track_key in track_keys:
+                if not track_key or Path(track_key).name != track_key:
+                    raise ValueError(f"Invalid track key: {track_key!r}")
 
-        return self._run([
-            "add",
-            "--dbase",
-            str(self.db_path),
-            *self._analysis_args(),
-            *files
-        ])
+        def update(working_path: Path, current_exists: bool) -> str:
+            command = mode
+            if mode == "auto":
+                command = "add" if current_exists else "new"
+
+            ingest_files = files
+            aliases: list[Path] = []
+            if track_keys is not None:
+                ingest_files, aliases = self._create_ingest_aliases(files, track_keys)
+
+            try:
+                return self._run([
+                    command,
+                    "--dbase",
+                    str(working_path),
+                    *self._analysis_args(),
+                    *ingest_files,
+                ])
+            finally:
+                for alias in aliases:
+                    try:
+                        alias.unlink()
+                    except FileNotFoundError:
+                        pass
+
+        return self.storage.atomic_update(
+            update,
+            require_existing=mode == "add",
+            require_missing=mode == "new",
+        )
+
+    def _create_ingest_aliases(
+        self,
+        files: list[str],
+        track_keys: list[str],
+    ) -> tuple[list[str], list[Path]]:
+        ingest_dir = self.db_path.parent / ".ingest"
+        ingest_dir.mkdir(parents=True, exist_ok=True)
+
+        aliases = [ingest_dir / track_key for track_key in track_keys]
+        created_aliases: list[Path] = []
+        try:
+            for source, alias in zip(files, aliases):
+                try:
+                    alias.unlink()
+                except FileNotFoundError:
+                    pass
+
+                try:
+                    os.link(source, alias)
+                except OSError:
+                    shutil.copy2(source, alias)
+                created_aliases.append(alias)
+        except Exception:
+            for alias in created_aliases:
+                try:
+                    alias.unlink()
+                except FileNotFoundError:
+                    pass
+            raise
+
+        return [str(alias.resolve()) for alias in aliases], aliases
+
+    def create_db(
+        self,
+        audio_files: list[str | Path],
+        *,
+        track_keys: list[str] | None = None,
+    ) -> str:
+        return self._write_database(
+            audio_files,
+            mode="new",
+            track_keys=track_keys,
+        )
+
+    def add_to_db(
+        self,
+        audio_files: list[str | Path],
+        *,
+        track_keys: list[str] | None = None,
+    ) -> str:
+        return self._write_database(
+            audio_files,
+            mode="add",
+            track_keys=track_keys,
+        )
+
+    def add_or_create(
+        self,
+        audio_files: list[str | Path],
+        *,
+        track_keys: list[str] | None = None,
+    ) -> str:
+        return self._write_database(
+            audio_files,
+            mode="auto",
+            track_keys=track_keys,
+        )
+
+    def remove_from_db(self, track_keys: list[str]) -> str:
+        if not track_keys:
+            return ""
+        for track_key in track_keys:
+            if not track_key or Path(track_key).name != track_key:
+                raise ValueError(f"Invalid track key: {track_key!r}")
+
+        stored_paths = [
+            str((self.db_path.parent / ".ingest" / track_key).resolve())
+            for track_key in track_keys
+        ]
+
+        def update(working_path: Path, current_exists: bool) -> str:
+            return self._run(
+                [
+                    "remove",
+                    "--dbase",
+                    str(working_path),
+                    *stored_paths,
+                ],
+                require_ffmpeg=False,
+            )
+
+        return self.storage.atomic_update(update, require_existing=True)
+
+    def validate_db(self) -> None:
+        self.storage.validate_gzip()
+        self._semantic_validate(self.db_path)
+
+    def recover_database(self, *, promote: bool = False) -> dict:
+        return self.storage.recover_corrupted_gzip(
+            self._semantic_validate,
+            promote=promote,
+        )
+
+    def _semantic_validate(self, db_path: Path) -> None:
+        self._run(
+            ["list", "--dbase", str(db_path)],
+            require_ffmpeg=False,
+            discard_stdout=True,
+        )
 
     def match(self, sample_file: str | Path) -> str:
         return self._run([
