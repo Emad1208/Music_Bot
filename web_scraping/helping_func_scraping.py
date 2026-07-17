@@ -4,6 +4,9 @@ STOP_WORDS = {
     "موزیک",
     "ترانه",
     "دانلود",
+    "به نام",
+    "بنام",
+    "با نام",
     "song",
     "music",
     "download",
@@ -12,12 +15,10 @@ STOP_WORDS = {
 
 
 def remove_stop_words(text: str) -> str:
-    words = text.split()
-    cleaned_words = [
-        word for word in words
+    return " ".join(
+        word for word in text.split()
         if word not in STOP_WORDS
-    ]
-    return " ".join(cleaned_words)
+    )
 
 STOP_PHRASES_DEL = (
     'ریمیکس',

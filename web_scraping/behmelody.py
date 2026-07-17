@@ -26,47 +26,78 @@ timeout = httpx.Timeout(
     
 client = httpx.AsyncClient(headers= headers,timeout= timeout,limits= limits , follow_redirects= True, verify= False)
 scrape_semaphore = asyncio.Semaphore(5)
+MAX_SEARCH_PAGES = 3
 
 
 async def close_client_behmelody():
     await client.aclose()
 
+
+async def _get_response(url, retries=2, **kwargs):
+    for attempt in range(1, retries + 1):
+        try:
+            async with scrape_semaphore:
+                response = await client.get(url, **kwargs)
+
+            response.raise_for_status()
+            return response
+        except httpx.HTTPError as exc:
+            if attempt >= retries:
+                print(f"behmelody request failed: {url}: {exc!r}")
+                return None
+
+
 def is_mp3_link(url):
     return '.mp3' in url.lower()
 
 
-async def search_song(text):
-    url = f'https://behmelody.in/search/{quote(text)}'
-
-    async with scrape_semaphore:
-        response = await client.get(url)
-
-    bs = BeautifulSoup(response.text, 'html.parser')
-
-    box = bs.find('div', class_='behmbox')
-    if not box:
-        return {}
-
-    items = box.find_all('div', class_='behsleft')
-
+async def search_song(text, max_pages=MAX_SEARCH_PAGES):
     pages = {}
-    for item in items:
-        a_tag = item.find('a')
-        if not a_tag:
-            continue
+    next_url = f'https://behmelody.in/search/{quote(text)}'
+    visited_urls = set()
 
-        title = a_tag.get_text(strip=True)
-        link = a_tag.get('href')
+    for _ in range(max_pages):
+        if not next_url or next_url in visited_urls:
+            break
 
-        if title and link:
-            pages[title] = link
+        visited_urls.add(next_url)
+
+        response = await _get_response(next_url)
+        if response is None:
+            break
+
+        bs = BeautifulSoup(response.text, 'html.parser')
+
+        box = bs.find('div', class_='behmbox')
+        if not box:
+            break
+
+        for item in box.find_all('div', class_='behsleft'):
+            a_tag = item.find('a')
+            if not a_tag:
+                continue
+
+            title = a_tag.get_text(strip=True)
+            link = a_tag.get('href')
+
+            if title and link:
+                pages[title] = urljoin(str(response.url), link)
+
+        next_tag = (
+            bs.select_one('a.next.page-numbers')
+            or bs.select_one('a.behnxt')
+        )
+        next_href = next_tag.get('href') if next_tag else None
+        next_url = urljoin(str(response.url), next_href) if next_href else None
 
     return pages
 
 
 async def find_song(url):
-    async with scrape_semaphore:
-        response = await client.get(url)
+    response = await _get_response(url)
+    if response is None:
+        return {}
+
     print(response.status_code)
     bs = BeautifulSoup(response.text, 'html.parser')
     music_one = {}
@@ -131,8 +162,9 @@ async def find_song(url):
 
 
 async def find_album(url):
-    async with scrape_semaphore:
-        response = await client.get(url, follow_redirects=True)
+    response = await _get_response(url, follow_redirects=True)
+    if response is None:
+        return {}
 
     bs = BeautifulSoup(response.text, 'html.parser')
     body = bs.find('body')
@@ -199,9 +231,13 @@ async def process_search_query_get(query):
 
     tasks = [find_result(link) for link in links]
 
-    responses = await asyncio.gather(*tasks)
+    responses = await asyncio.gather(*tasks, return_exceptions=True)
 
     for response in responses:
+        if isinstance(response, Exception):
+            print("behmelody find_result error:", repr(response))
+            continue
+
         if not response:
             continue
         results.update(response)

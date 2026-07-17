@@ -40,7 +40,13 @@ from fprint.service import get_audio_file_id, identify_message_audio
 from .bot_helpers import start_message, cleanup_search_cache
 from .audio_downloader import close_download_client ,close_download_client_no_ssl
 from .bot_state import get_user_lock
-from .music_handlers import handle_quality_callback, handle_music_callback, handle_song_name, send_cached_music
+from .music_handlers import (
+    handle_music_callback,
+    handle_quality_callback,
+    handle_results_page_callback,
+    handle_song_name,
+    send_cached_music,
+)
 
 
 token = config('TEST_BOT') 
@@ -231,7 +237,10 @@ async def handle_message(*, message):
     if state == "waiting_for_name":
         with timer("NAME_REQUEST"):
             if not text:
-                await message.reply("لطفا نام آهنگ یا خواننده را به صورت متن ارسال کنید.")
+                await message.reply("لطفا نام آهنگ یا خواننده را به صورت متن ارسال کنید.\n"
+                                    f"برای *جستوجو با ارسال ویس* روی دکمه زیر بزنید",
+                                    InlineKeyboard([('جستوجو با ارسال ویس', 'waiting_for_voice')])
+                                    )
                 return
 
             await handle_song_name(message,bot)
@@ -249,7 +258,10 @@ async def handle_message(*, message):
             file_id, _ = get_audio_file_id(message)
 
             if not file_id:
-                await message.reply("لطفا یک فایل صوتی یا ویس ارسال کنید.")
+                await message.reply("لطفا یک فایل صوتی یا ویس ارسال کنید.\n"
+                                    f"برای *جستوجو با نام آهنگ و خواننده* روی دکمه زیر بزنید",
+                                    InlineKeyboard([('جستوجو با اسم اهنگ و خواننده', 'waiting_for_name')])
+                                    )
                 return
 
             if user_state[user_id].get("voice_processing"):
@@ -330,6 +342,10 @@ async def answer_callback_query(callback_query):
         return
 
     # music result callbacks
+    if data.startswith("results_page:"):
+        await handle_results_page_callback(callback_query)
+        return
+
     if data.startswith("music:"):
         await handle_music_callback(callback_query)
         return

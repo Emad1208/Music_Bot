@@ -16,7 +16,7 @@ from utils.timer import timer
 
 from commands.ads import user_state
 from .bot_state import search_results_cache, get_user_lock, CACHE_TTL
-from web_scraping.scrape_runner import show_music_results
+from web_scraping.scrape_runner import build_results_page, show_music_results
 from .bot_helpers import safe_answer_callback
 from .audio_downloader import safe_get_remote_size, send_music
 from .ad_runtime import send_ad_before_music
@@ -81,6 +81,47 @@ async def handle_song_name(message, bot):
         )
         print(traceback.format_exc())
 
+
+
+async def handle_results_page_callback(callback_query):
+    data = callback_query.data
+    user_id = callback_query.author.id
+
+    if not data.startswith("results_page:"):
+        return
+
+    await safe_answer_callback(callback_query, "نمایش نتایج")
+
+    try:
+        _, search_id, page = data.split(":")
+        page = int(page)
+
+        cache_item = search_results_cache.get(search_id)
+        if not cache_item:
+            await callback_query.message.reply("❌ نتیجه منقضی شده، دوباره سرچ کن.")
+            return
+
+        if cache_item.get("user_id") != user_id:
+            await callback_query.message.reply("❌ این نتایج متعلق به جستجوی شما نیست.")
+            return
+
+        if time.time() - cache_item["created_at"] > CACHE_TTL:
+            search_results_cache.pop(search_id, None)
+            await callback_query.message.reply("❌ زمان این نتیجه تمام شده، دوباره سرچ کن.")
+            return
+
+        text, keyboard = build_results_page(
+            search_id,
+            cache_item["results"],
+            page,
+        )
+        await callback_query.message.edit(text, keyboard)
+
+    except (TypeError, ValueError):
+        await callback_query.message.reply("❌ صفحهٔ نتایج نامعتبر است.")
+    except Exception as e:
+        print("Results Page Error:", repr(e))
+        await callback_query.message.reply("❌ خطا در نمایش صفحهٔ نتایج.")
 
 
 async def handle_music_callback(callback_query):

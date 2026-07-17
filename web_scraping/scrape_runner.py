@@ -31,7 +31,39 @@ except ValueError:
 
 global_search_query = asyncio.Semaphore(5)
 MAX_SCRAPED_RESULTS = 10
-INITIAL_VISIBLE_RESULTS = 5
+RESULTS_PER_PAGE = 5
+
+
+def build_results_page(search_id, results, page=0):
+    if not results:
+        raise ValueError("results cannot be empty")
+
+    total_pages = (len(results) + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE
+    if page < 0 or page >= total_pages:
+        raise ValueError("invalid results page")
+
+    start = page * RESULTS_PER_PAGE
+    end = min(start + RESULTS_PER_PAGE, len(results))
+    buttons = []
+
+    for index in range(start, end):
+        item = results[index]
+        button_text = item["name"][:60]
+        callback_data = f"music:{search_id}:{index}"
+        buttons.append([(button_text, callback_data)])
+
+    navigation = []
+    if page > 0:
+        navigation.append(("⬅️ قبلی", f"results_page:{search_id}:{page - 1}"))
+    if page + 1 < total_pages:
+        navigation.append(("بعدی ➡️", f"results_page:{search_id}:{page + 1}"))
+    if navigation:
+        buttons.append(navigation)
+
+    text = (
+        "یکی از گزینه‌های زیر را انتخاب کنید:\n"
+    )
+    return text, InlineKeyboard(*buttons)
 
 def detect_query_lang(text):
     fa_count = len(re.findall(r'[\u0600-\u06FF]', text))
@@ -212,7 +244,7 @@ async def filter_valid_top_results(
 async def show_music_results(message, song, search_results_cache):
     mem("SHOW_START")
     with timer("DB_SEARCH_BEFORE_SCRAPE"):
-        db_results = db.search_musics_grouped_by_title(song, limit=5)
+        db_results = db.search_musics_grouped_by_title(song, limit=10)
         mem("AFTER_DB_SEARCH")
     if db_results:
         if len(db_results) >= DB_RESULT_THRESHOLD:
@@ -235,7 +267,6 @@ async def show_music_results(message, song, search_results_cache):
         return
 
     top_results = music_info[:MAX_SCRAPED_RESULTS]
-    visible_results = top_results[:INITIAL_VISIBLE_RESULTS]
     del music_info
     gc.collect()
     mem("AFTER_DELETE_MUSIC_INFO")
@@ -251,16 +282,15 @@ async def show_music_results(message, song, search_results_cache):
     mem("AFTER_CACHE_SAVE")
     print("CACHE_SIZE:", len(search_results_cache))
 
-    buttons = []
-
-    for index, item in enumerate(visible_results):
-        button_text = item["name"][:60]
-        callback_data = f"music:{search_id}:{index}"
-        buttons.append([(button_text, callback_data)])
+    result_text, result_keyboard = build_results_page(
+        search_id,
+        top_results,
+        page=0,
+    )
 
     await message.reply(
-        "یکی از گزینه‌های زیر را انتخاب کنید:",
-        InlineKeyboard(*buttons)
+        result_text,
+        result_keyboard,
     )
 async def show_db_music_results(message, song, db_results, search_results_cache):
     search_id = str(uuid.uuid4())
@@ -282,16 +312,15 @@ async def show_db_music_results(message, song, db_results, search_results_cache)
     }
     mem("AFTER_CACHE_SAVE")
     print("CACHE_SIZE", len(search_results_cache))
-    buttons = []
-
-    for index, item in enumerate(results):
-        button_text = item["name"][:60]
-        callback_data = f"music:{search_id}:{index}"
-        buttons.append([(button_text, callback_data)])
+    result_text, result_keyboard = build_results_page(
+        search_id,
+        results,
+        page=0,
+    )
 
     await message.reply(
-        "یکی از گزینه‌های زیر را انتخاب کنید:",
-        InlineKeyboard(*buttons)
+        result_text,
+        result_keyboard,
     )
 
 

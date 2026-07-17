@@ -210,7 +210,7 @@ def calculate_similarity_score(user_input: str, song_name: str) -> float:
     return round(max(0.0, min(100.0, float(score))), 2)
 
 
-async def find_similar_songs(user_input: str, song_dict: dict, similarity_threshold: int = 70) -> list[dict]:
+async def find_similar_songs(user_input: str, song_dict: dict, similarity_threshold: int = 50) -> list[dict]:
     matched_links = []
 
     if not song_dict:
