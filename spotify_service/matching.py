@@ -93,6 +93,39 @@ VERSION_WORDS = (
     "لایو",
 )
 
+SEARCH_NOISE_PHRASES = (
+    "با نام",
+    "به نام",
+    "بنام",
+)
+
+SEARCH_NOISE_WORDS = {
+    "آهنگ",
+    "اهنگ",
+    "دی جی",
+    "دیجی",
+    "از",
+    "ترانه",
+    "جدید",
+    "دانلود",
+    "ریمیکس",
+    "شنیدنی",
+    "متن",
+    "موزیک",
+    "موزيک",
+    "موسیقی",
+    "موسیقي",
+    "موسيقي",
+    "download",
+    "music",
+    "new",
+    "reemix",
+    "remix",
+    "song",
+    "dj",
+    "DJ",
+}
+
 
 def clean_spotify_title(title):
     title = re.sub(r"\s+", " ", title or "").strip()
@@ -130,6 +163,29 @@ def clean_spotify_title(title):
     title = re.sub(r"[^\w\s]", " ", title)
     title = title.replace("_", " ")
     return re.sub(r"\s+", " ", title).strip()
+
+
+def clean_search_phrase(text):
+    text = re.sub(r"\s+", " ", text or "").strip()
+
+    for phrase in SEARCH_NOISE_PHRASES:
+        pattern = re.escape(phrase).replace(r"\ ", r"\s+")
+        text = re.sub(
+            rf"(?<!\w){pattern}(?!\w)",
+            " ",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+    for word in sorted(SEARCH_NOISE_WORDS, key=len, reverse=True):
+        text = re.sub(
+            rf"(?<!\w){re.escape(word)}(?!\w)",
+            " ",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+    return clean_spotify_title(text)
 
 
 def search_tokens(text):

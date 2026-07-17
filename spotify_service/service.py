@@ -3,12 +3,13 @@ from pathlib import PurePosixPath
 from urllib.parse import unquote, urlparse
 
 from .client import SpotifyClient
-from .matching import clean_spotify_title, search_tokens, token_coverage_score
+from .matching import clean_search_phrase, search_tokens, token_coverage_score
 
 
 spotify_client = SpotifyClient()
 
 MIN_TRACK_SCORE = 75
+MIN_FILENAME_QUERY_SCORE = 70
 SEARCH_RESULT_LIMIT = 10
 
 
@@ -46,8 +47,18 @@ async def get_spotify_download_metadata(title, download_url=""):
     return None
 
 
-def get_download_filename_phrase(download_url):
-    return _download_filename_query(download_url)
+def clean_spotify_search_query(query):
+    return clean_search_phrase(query)
+
+
+def get_download_filename_phrase(download_url, title=""):
+    filename_query = _download_filename_query(download_url)
+    title = clean_search_phrase(title)
+
+    if title and not _is_related_filename_query(title, filename_query):
+        return ""
+
+    return filename_query
 
 
 def _select_track(tracks, query):
@@ -95,14 +106,12 @@ def _track_metadata(track):
 
 
 def _download_search_queries(title, download_url):
-    title = " ".join((title or "").split())
+    title = clean_search_phrase(title)
     filename_query = _download_filename_query(download_url)
-    candidates = []
+    candidates = [title]
 
-    if re.search(r"[A-Za-z]", title):
-        candidates.extend((title, filename_query))
-    else:
-        candidates.extend((filename_query, title))
+    if not title or _is_related_filename_query(title, filename_query):
+        candidates.append(filename_query)
 
     seen = set()
     queries = []
@@ -130,9 +139,21 @@ def _download_filename_query(download_url):
         filename,
         flags=re.IGNORECASE,
     )
-    filename = clean_spotify_title(filename)
+    filename = re.sub(r"\b\d+\b", " ", filename)
+    filename = clean_search_phrase(filename)
 
     if not re.search(r"[A-Za-z]", filename):
         return ""
 
     return filename
+
+
+def _is_related_filename_query(title, filename_query):
+    if not title or not filename_query:
+        return False
+
+    score = token_coverage_score(
+        search_tokens(title),
+        search_tokens(filename_query),
+    )
+    return score >= MIN_FILENAME_QUERY_SCORE

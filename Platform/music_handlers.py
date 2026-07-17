@@ -7,6 +7,7 @@ from dictation.similar_remove_text import only_removing
 
 from db_Project.db_init import db, word_db
 from spotify_service import (
+    clean_spotify_search_query,
     get_download_filename_phrase,
     get_spotify_download_metadata,
 )
@@ -283,20 +284,28 @@ async def handle_quality_callback(callback_query, bot):
 
 async def save_spotify_download_metadata(song_name, file_url=""):
     try:
+        clean_song_name = clean_spotify_search_query(song_name)
+        if not clean_song_name:
+            print("SPOTIFY DOWNLOAD METADATA: empty query after cleanup")
+            return False
+
         with timer("SPOTIFY_DOWNLOAD_METADATA_SEARCH"):
             spotify_metadata = await get_spotify_download_metadata(
-                song_name,
+                clean_song_name,
                 file_url,
             )
 
         if not spotify_metadata:
-            english_phrase = get_download_filename_phrase(file_url)
+            english_phrase = get_download_filename_phrase(
+                file_url,
+                clean_song_name,
+            )
             if english_phrase and word_db.add_en_fa_phrase(
-                song_name,
+                clean_song_name,
                 english_phrase,
             ):
                 print("DOWNLOAD FILENAME PHRASE SAVED:", {
-                    "fa_phrase": song_name,
+                    "fa_phrase": clean_song_name,
                     "en_phrase": english_phrase,
                 })
                 return True
@@ -307,7 +316,7 @@ async def save_spotify_download_metadata(song_name, file_url=""):
         print("SPOTIFY DOWNLOAD METADATA:", spotify_metadata)
         return word_db.save_spotify_metadata(
             spotify_metadata,
-            downloaded_title=song_name,
+            downloaded_title=clean_song_name,
         )
     except Exception as e:
         print("SPOTIFY DOWNLOAD METADATA ERROR:", repr(e))

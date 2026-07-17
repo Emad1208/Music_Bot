@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 from hazm import Normalizer
 from rapidfuzz import fuzz
-from spotify_service.matching import clean_spotify_title
+from spotify_service.matching import clean_search_phrase, clean_spotify_title
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -268,8 +268,8 @@ class WordDatabase:
 
 
     def add_en_fa_phrase(self, fa_phrase: str, en_phrase: str):
-        fa_phrase = clean_spotify_title(fa_phrase)
-        en_phrase = _clean_catalog_name(en_phrase)
+        fa_phrase = clean_search_phrase(fa_phrase)
+        en_phrase = clean_search_phrase(en_phrase)
         fa_word_count = len(fa_phrase.split())
         en_word_count = len(en_phrase.split())
 
@@ -330,13 +330,24 @@ class WordDatabase:
             print("SPOTIFY METADATA SAVE SKIPPED:", spotify_metadata)
             return False
 
+        if downloaded_title:
+            clean_downloaded_title = clean_search_phrase(downloaded_title)
+            english_phrase = clean_search_phrase(" ".join((*artists, title)))
+            phrase_saved = self.add_en_fa_phrase(
+                clean_downloaded_title,
+                english_phrase,
+            )
+
+            if PERSIAN_RE.search(clean_downloaded_title) and not phrase_saved:
+                print("SPOTIFY METADATA SAVE SKIPPED: invalid phrase pair", {
+                    "fa_phrase": clean_downloaded_title,
+                    "en_phrase": english_phrase,
+                })
+                return False
+
         saved_artists = [self.add_singer(artist) for artist in artists]
         saved_title = self.add_title(title)
         saved = all(saved_artists) and saved_title
-
-        if downloaded_title:
-            english_phrase = _clean_catalog_name(" ".join((*artists, title)))
-            self.add_en_fa_phrase(downloaded_title, english_phrase)
 
         if saved:
             print("SPOTIFY METADATA SAVED:", {
