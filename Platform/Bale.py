@@ -47,9 +47,13 @@ from .music_handlers import (
     handle_song_name,
     send_cached_music,
 )
+from .shutdown import (
+    install_shutdown_signal_handlers,
+    notify_active_admins_bot_stopped,
+)
 
 
-token = config('TEST_BOT') 
+token = config('BALE_BOT_TOKEN')
 
 bot = Client(token)
 # user_state = {}
@@ -409,6 +413,9 @@ async def answer_callback_query(callback_query):
 
 
 def bot_run():
+    shutdown_reason = "توقف دستی یا دریافت فرمان خاموش‌شدن سرویس"
+    install_shutdown_signal_handlers()
+
     try:
         print("Bot is running...")
 
@@ -417,7 +424,18 @@ def bot_run():
 
         bot.run()
 
+    except BaseException as error:
+        shutdown_reason = f"خطای پیش‌بینی‌نشده ({type(error).__name__})"
+        raise
+
     finally:
+        try:
+            asyncio.run(
+                notify_active_admins_bot_stopped(token, shutdown_reason)
+            )
+        except Exception as error:
+            print(f"Shutdown notification failed: {error}")
+
         asyncio.run(close_client_upmusics())
         asyncio.run(close_client_musicsweb())
         asyncio.run(close_client_gisomusic())
