@@ -1,7 +1,7 @@
 import httpx
 import asyncio
 from bs4 import BeautifulSoup
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 import re
 from .helping_func_scraping import remove_stop_words
 
@@ -25,9 +25,24 @@ timeout = httpx.Timeout(
     
 client = httpx.AsyncClient(headers= headers,timeout= timeout,limits= limits , follow_redirects= True)
 scrape_semaphore = asyncio.Semaphore(5)
+MAX_SEARCH_PAGES = 3
 
 async def close_client_upmusics():
     await client.aclose()
+
+
+async def _get_response(url, client, scrape_semaphore, retries=2):
+    for attempt in range(1, retries + 1):
+        try:
+            async with scrape_semaphore:
+                response = await client.get(url)
+
+            response.raise_for_status()
+            return response
+        except httpx.HTTPError as exc:
+            if attempt >= retries:
+                print(f"upmusic request failed: {url}: {exc!r}")
+                return None
 
 STOP_WORDS = {
     "اهنگ",
@@ -41,37 +56,50 @@ STOP_WORDS = {
     "Download"
 }
 
-async def search_song(text, client, scrape_semaphore):
-    url = f'https://upmusics.com/search/{quote(text)}'
-    async with scrape_semaphore:
-        r = await client.get(url)
-    print(r.status_code)
-
-    bs = BeautifulSoup(r.text, 'html.parser')
-    musics = bs.find_all('article', class_="upsng")
-
-    # ✅ اگر هیچ نتیجه‌ای نبود
-    if not musics:
-        page_text = bs.get_text()
-        if "پیدا نشد" in page_text:
-            return None  # یعنی نتیجه‌ای وجود نداره
-
+async def search_song(
+    text,
+    client,
+    scrape_semaphore,
+    max_pages=MAX_SEARCH_PAGES,
+):
     music_dict = {}
+    next_url = f'https://upmusics.com/search/{quote(text)}'
+    visited_urls = set()
 
-    for art in musics:
-        h2 = art.find('h2')
-        if not h2:
-            continue
+    for _ in range(max_pages):
+        if not next_url or next_url in visited_urls:
+            break
 
-        a_tag = h2.find('a')
-        if not a_tag:
-            continue
+        visited_urls.add(next_url)
+        response = await _get_response(next_url, client, scrape_semaphore)
+        if response is None:
+            break
 
-        name = a_tag.get_text(strip=True)
-        link = a_tag.get('href')
+        print(response.status_code)
+        bs = BeautifulSoup(response.text, 'html.parser')
+        musics = bs.find_all('article', class_="upsng")
 
-        if name and link:
-            music_dict[name] = link
+        if not musics and "پیدا نشد" in bs.get_text():
+            break
+
+        for art in musics:
+            h2 = art.find('h2')
+            if not h2:
+                continue
+
+            a_tag = h2.find('a')
+            if not a_tag:
+                continue
+
+            name = a_tag.get_text(strip=True)
+            link = a_tag.get('href')
+
+            if name and link:
+                music_dict[name] = urljoin(str(response.url), link)
+
+        next_tag = bs.select_one('a.next.page-numbers')
+        next_href = next_tag.get('href') if next_tag else None
+        next_url = urljoin(str(response.url), next_href) if next_href else None
 
     return music_dict if music_dict else None
 
@@ -79,8 +107,9 @@ async def search_song(text, client, scrape_semaphore):
 
 async def find_song(url, client, scrape_semaphore):
     try:
-        async with scrape_semaphore:
-            r = await client.get(url)
+        r = await _get_response(url, client, scrape_semaphore)
+        if r is None:
+            return None
 
         bs = BeautifulSoup(r.text, 'html.parser')
         music_dict = {}
@@ -109,10 +138,14 @@ async def find_song(url, client, scrape_semaphore):
                 link_320_tag = download_box.find('a', title='دانلود آهنگ با کیفیت عالی (320)')
 
                 if link_128_tag:
-                    qualities['128'] = {'url': link_128_tag.get('href')}
+                    qualities['128'] = {
+                        'url': urljoin(str(r.url), link_128_tag.get('href'))
+                    }
 
                 if link_320_tag:
-                    qualities['320'] = {'url': link_320_tag.get('href')}
+                    qualities['320'] = {
+                        'url': urljoin(str(r.url), link_320_tag.get('href'))
+                    }
 
             if music_name and qualities:
                 music_dict[music_name] = qualities
@@ -160,6 +193,7 @@ async def find_song(url, client, scrape_semaphore):
                     link = prev_download.get('href')
 
             if link:
+                link = urljoin(str(r.url), link)
                 key = f"{singer} - {song}"
                 key = remove_stop_words(key)
 
@@ -254,8 +288,12 @@ async def process_search_query_get(query, client , scrape_semaphore):
     tasks = [handle_song_search_results(link, client, scrape_semaphore)
     for link in links]
 
-    responses = await asyncio.gather(*tasks)
+    responses = await asyncio.gather(*tasks, return_exceptions=True)
     for response in responses:
+        if isinstance(response, Exception):
+            print("upmusic find_song error:", repr(response))
+            continue
+
         if not response:
             continue
         results.update(response)

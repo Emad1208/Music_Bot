@@ -1,6 +1,6 @@
 import httpx
 from bs4 import BeautifulSoup
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 import asyncio
 import re
 from .helping_func_scraping import remove_stop_words
@@ -25,9 +25,24 @@ timeout = httpx.Timeout(
     
 client = httpx.AsyncClient(headers= headers,timeout= timeout,limits= limits , follow_redirects= True, verify= False)
 scrape_semaphore = asyncio.Semaphore(5)
+MAX_SEARCH_PAGES = 3
 
 async def close_client_gisomusic():
     await client.aclose()
+
+
+async def _get_response(url, retries=2):
+    for attempt in range(1, retries + 1):
+        try:
+            async with scrape_semaphore:
+                response = await client.get(url)
+
+            response.raise_for_status()
+            return response
+        except httpx.HTTPError as exc:
+            if attempt >= retries:
+                print(f"gisomusic request failed: {url}: {exc!r}")
+                return None
 
 
 def make_giso_urls(query):
@@ -52,8 +67,11 @@ def make_giso_urls(query):
 async def search_gisomusic(query):
     urls = make_giso_urls(query)
 
-    for url in urls:
-        result = await search_song(url)
+    for url_type, url in urls:
+        if url_type == "direct":
+            result = await find_song(url)
+        else:
+            result = await search_song(url)
 
         if result:
             return result
@@ -61,47 +79,65 @@ async def search_gisomusic(query):
     return {}
 
 
-async def search_song(url):
-    async with scrape_semaphore:
-        r = await client.get(url)
-
-    bs = BeautifulSoup(r.text, "html.parser")
-
-    # صفحه پیدا نشد
-    if bs.find("article", class_="g404p"):
-        return None
-
-    container = bs.find("div", class_="gcntr")
-    if not container:
-        return None
-
-    pages = container.find_all("article", class_="mso_pst")
-    if not pages:
-        return None
-
+async def search_song(url, max_pages=MAX_SEARCH_PAGES):
     musics = {}
+    next_url = url
+    visited_urls = set()
 
-    for a in pages:
-        title_tag = a.find("header").find("a") if a.find("header") else None
-        link_box = a.find("p", class_="mk_mcbx")
-        link_tag = link_box.find("a") if link_box else None
+    for page_number in range(max_pages):
+        if not next_url or next_url in visited_urls:
+            break
 
-        if not title_tag or not link_tag:
-            continue
+        visited_urls.add(next_url)
+        response = await _get_response(next_url)
+        if response is None:
+            break
 
-        title = title_tag.get_text(strip=True)
-        link = link_tag.get("href")
+        # Invalid search/tag slugs can redirect to the home page. Those
+        # results are unrelated to the user's query and must be ignored.
+        if page_number == 0 and response.url.path in ("", "/"):
+            break
 
-        if title and link:
-            musics[title] = link
+        bs = BeautifulSoup(response.text, "html.parser")
+
+        if bs.find("article", class_="g404p"):
+            break
+
+        container = bs.find("div", class_="gcntr")
+        if not container:
+            break
+
+        pages = container.find_all("article", class_="mso_pst")
+        if not pages:
+            break
+
+        for article in pages:
+            header = article.find("header")
+            title_tag = header.find("a") if header else None
+            link_box = article.find("p", class_="mk_mcbx")
+            link_tag = link_box.find("a") if link_box else None
+
+            if not title_tag or not link_tag:
+                continue
+
+            title = title_tag.get_text(strip=True)
+            link = link_tag.get("href")
+
+            if title and link:
+                musics[title] = urljoin(str(response.url), link)
+
+        next_tag = bs.select_one("a.next.page-numbers")
+        next_href = next_tag.get("href") if next_tag else None
+        next_url = urljoin(str(response.url), next_href) if next_href else None
 
     return musics or None
 
 
 async def find_song(url):
     try:
-        async with scrape_semaphore:
-            r = await client.get(url)
+        r = await _get_response(url)
+        if r is None:
+            return None
 
         bs = BeautifulSoup(r.text, 'html.parser') 
 
