@@ -248,12 +248,3 @@ async def only_removing(text):
     return cleaned
 
 
-# async def dictation(text):
-
-#     result = await process_query(text)
-
-#     # print(result)
-
-#     return result
-
-# print(clean_with_db("شادمحر عغیلی"))

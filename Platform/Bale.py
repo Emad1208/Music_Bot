@@ -19,6 +19,7 @@ from web_scraping.upmusic import close_client_upmusics
 from web_scraping.gisomusic import close_client_gisomusic
 from web_scraping.musicdel import close_client_music_del
 from web_scraping.behmelody import close_client_behmelody
+from web_scraping.Musics_Mehr import close_client_musics_mehr
 
 from db_Project.db_init import db
 
@@ -36,6 +37,7 @@ from commands.channel import (
     is_channel_setup_state,
 )
 from fprint.service import get_audio_file_id, identify_message_audio
+from fprint.queue import start_fingerprint_queue, stop_fingerprint_queue
 
 from .bot_helpers import start_message, cleanup_search_cache
 from .audio_downloader import close_download_client ,close_download_client_no_ssl
@@ -60,6 +62,16 @@ bot = Client(token)
 # search_results_cache = {}
 # user_locks = {}
 # CACHE_TTL =  10 * 60
+
+
+@bot.on_initialize()
+async def initialize_fingerprint_queue():
+    await start_fingerprint_queue()
+
+
+@bot.on_shutdown()
+async def shutdown_fingerprint_queue():
+    await stop_fingerprint_queue()
 
 
 @bot.on_command(private, name= 'start')
@@ -442,6 +454,7 @@ def bot_run():
         asyncio.run(close_client_music_del())
         asyncio.run(close_download_client())
         asyncio.run(close_client_behmelody())
+        asyncio.run(close_client_musics_mehr())
         asyncio.run(close_download_client_no_ssl())
     
 

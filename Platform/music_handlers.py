@@ -20,6 +20,7 @@ from web_scraping.scrape_runner import build_results_page, show_music_results
 from .bot_helpers import safe_answer_callback
 from .audio_downloader import safe_get_remote_size, send_music
 from .ad_runtime import send_ad_before_music
+from fprint.queue import submit_fingerprint_job
 
 
 async def handle_song_name(message, bot):
@@ -197,6 +198,7 @@ async def handle_quality_callback(callback_query, bot):
     data = callback_query.data
     chat_id = callback_query.message.chat.id
     user_id = callback_query.author.id
+    fingerprint_job = None
 
     if not data.startswith("quality:"):
         return
@@ -289,7 +291,7 @@ async def handle_quality_callback(callback_query, bot):
                 return
 
             with timer("SEND_FROM_URL"):
-                await send_music(
+                fingerprint_job = await send_music(
                     bot=bot,
                     chat_id=chat_id,
                     url=file_url,
@@ -321,6 +323,11 @@ async def handle_quality_callback(callback_query, bot):
     finally:
         if lock.locked():
             lock.release()
+        if fingerprint_job is not None:
+            try:
+                submit_fingerprint_job(fingerprint_job)
+            except Exception as e:
+                print("FINGERPRINT_QUEUE_SUBMIT_ERROR:", repr(e))
 
 
 async def save_spotify_download_metadata(song_name, file_url=""):

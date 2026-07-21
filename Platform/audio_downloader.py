@@ -4,12 +4,9 @@ import httpx
 from balethon.objects import InlineKeyboardButton, InlineKeyboard
 import asyncio
 from db_Project.db_init import db, word_db
+from fprint.queue import stage_fingerprint_job
 from utils.timer import timer
 import time
-from pathlib import Path
-from fingerprint.wrapper import AudfprintWrapper
-wrapper = AudfprintWrapper()
-fingerprint_save_lock = asyncio.Lock()
 
 download_semaphore = asyncio.Semaphore(10)
 send_semaphore = asyncio.Semaphore(5)
@@ -64,7 +61,9 @@ def get_source(url):
         "upmusics.com": "upmusics",
         "musicsweb.ir": "musicsweb",
         'musicdel.ir': 'musicdel',
-        'behmelody.in': 'behmelody'
+        'behmelody.in': 'behmelody',
+        'mehrdl.top': 'musics_mehr',
+        'musics-mehr.com': 'musics_mehr',
     }
 
     for domain, name in sources.items():
@@ -237,33 +236,6 @@ async def safe_send_audio(bot, chat_id, file_path, title, artist):
         return None
 
 
-async def save_fingerprint_safely(music_id, file_path):
-    async with fingerprint_save_lock:
-        if db.has_music_fingerprint(music_id):
-            return
-
-        suffix = Path(file_path).suffix.lower() or ".mp3"
-        track_key = f"music-{music_id}{suffix}"
-
-        await asyncio.to_thread(
-            wrapper.add_or_create,
-            [file_path],
-            track_keys=[track_key],
-        )
-
-        try:
-            db.save_music_fingerprint(
-                music_id=music_id,
-                track_key=track_key,
-            )
-        except Exception:
-            try:
-                await asyncio.to_thread(wrapper.remove_from_db, [track_key])
-            except Exception as rollback_error:
-                print("FINGERPRINT_ROLLBACK_ERROR:", repr(rollback_error))
-            raise
-
-
 async def send_music(
     bot,
     chat_id,
@@ -274,6 +246,7 @@ async def send_music(
     source=None
 ):
     file_path = None
+    fingerprint_job = None
     final_title = f"{artist} - {title}" if artist else title
     source = get_source(url)
 
@@ -398,12 +371,6 @@ async def send_music(
                 source_url=url
             )
 
-            if music_id:
-                try:
-                    await save_fingerprint_safely(music_id, file_path)
-                except Exception as e:
-                    print("FINGERPRINT_SAVE_ERROR:", repr(e))
-
             db.increase_download_count(
                 title=final_title,
                 quality=quality
@@ -415,6 +382,17 @@ async def send_music(
                 upload_speed=upload_speed,
                 success=True
             )
+
+            if music_id:
+                try:
+                    fingerprint_job = stage_fingerprint_job(
+                        music_id,
+                        file_path,
+                    )
+                except Exception as e:
+                    print("FINGERPRINT_STAGE_ERROR:", repr(e))
+
+            return fingerprint_job
 
     except Exception as e:
         db.update_source_stats(
