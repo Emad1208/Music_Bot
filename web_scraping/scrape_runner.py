@@ -4,6 +4,7 @@ from .upmusic import process_search_query_upmusics
 from .gisomusic import process_search_query_gisomusic
 from .musicdel import process_search_query_musicdel
 from .behmelody import process_search_query_behmelody
+from .Musics_Mehr import process_search_query_musics_mehr
 from Platform.audio_downloader import safe_get_remote_size
 from utils.timer import timer
 from decouple import config
@@ -121,20 +122,22 @@ async def process_search_query(song):
                 upmusics = {}
                 gisomusic = {}
 
-                music_del, beh_melody = await asyncio.gather(
+                music_del, beh_melody, musics_mehr = await asyncio.gather(
                     safe_search("MUSIC_DEL", process_search_query_musicdel, song),
-                    safe_search("BEHMELODY", process_search_query_behmelody, song)
+                    safe_search("BEHMELODY", process_search_query_behmelody, song),
+                    safe_search("MUSICS_MEHR", process_search_query_musics_mehr, song),
                 )
 
                 mem("AFTER_EN_SCRAPE")
 
             else:
-                musics_web, upmusics, gisomusic, music_del, beh_melody = await asyncio.gather(
+                musics_web, upmusics, gisomusic, music_del, beh_melody, musics_mehr = await asyncio.gather(
                     safe_search("MUSICS_WEB", process_search_query_musicsweb, song),
                     safe_search("UPMUSICS", process_search_query_upmusics, song),
                     safe_search("GISOMUSIC", process_search_query_gisomusic, song),
                     safe_search("MUSIC_DEL", process_search_query_musicdel, song),
-                    safe_search("BEHMELODY", process_search_query_behmelody, song)
+                    safe_search("BEHMELODY", process_search_query_behmelody, song),
+                    safe_search("MUSICS_MEHR", process_search_query_musics_mehr, song),
                 )
 
                 mem("AFTER_FA_SCRAPE")
@@ -157,6 +160,9 @@ async def process_search_query(song):
             info_beh_melody = await find_similar_songs(song, beh_melody)
             mem("AFTER_SIMILAR_BEHMELODY")
 
+            info_musics_mehr = await find_similar_songs(song, musics_mehr)
+            mem("AFTER_SIMILAR_MUSICS_MEHR")
+
         all_results = []
         for source_results in (
             info_gisomusic,
@@ -164,6 +170,7 @@ async def process_search_query(song):
             info_upmusics,
             info_music_del,
             info_beh_melody,
+            info_musics_mehr,
         ):
             all_results.extend(source_results)
 
@@ -177,8 +184,8 @@ async def process_search_query(song):
 
         valid_results = await safe_filter("ALL_SOURCES", all_results)
 
-    del musics_web, upmusics, gisomusic, music_del, beh_melody
-    del info_gisomusic, info_musics_web, info_upmusics, info_music_del, info_beh_melody
+    del musics_web, upmusics, gisomusic, music_del, beh_melody, musics_mehr
+    del info_gisomusic, info_musics_web, info_upmusics, info_music_del, info_beh_melody, info_musics_mehr
     del all_results
     gc.collect()
     mem("BEFORE_RETURN_ALL_SOURCES")
