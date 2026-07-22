@@ -565,7 +565,7 @@ class Database:
 
         return self.cur.fetchone()[0]
 
-    def search_musics_grouped_by_title(self, query, limit=5):
+    def search_musics_grouped_by_title(self, query, limit=10):
         like_query = f"%{query}%"
 
         self.cur.execute("""

@@ -14,6 +14,7 @@ import re
 import uuid
 from balethon.objects import InlineKeyboardButton, InlineKeyboard
 from db_Project.db_init import db
+from db_cache_scrape import search_cache_db
 
 import os
 import gc
@@ -26,9 +27,9 @@ def mem(label):
     print(f"[MEM] {label}: {process.memory_info().rss / 1024 / 1024:.2f} MB")
 
 try:
-    DB_RESULT_THRESHOLD = int(config("DB_RESULT_THRESHOLD", default=4))
+    DB_RESULT_THRESHOLD = int(config("DB_RESULT_THRESHOLD", default=10))
 except ValueError:
-    DB_RESULT_THRESHOLD = 4
+    DB_RESULT_THRESHOLD = 10
 
 global_search_query = asyncio.Semaphore(5)
 MAX_SCRAPED_RESULTS = 10
@@ -248,8 +249,47 @@ async def filter_valid_top_results(
 
 
 
+async def show_cached_search_results(message, results, search_results_cache):
+    search_id = str(uuid.uuid4())
+
+    mem("BEFORE_CACHE_SAVE")
+    search_results_cache[search_id] = {
+        "user_id": message.author.id,
+        "created_at": time.time(),
+        "results": results
+    }
+    mem("AFTER_CACHE_SAVE")
+    print("CACHE_SIZE:", len(search_results_cache))
+
+    result_text, result_keyboard = build_results_page(
+        search_id,
+        results,
+        page=0,
+    )
+
+    await message.reply(
+        result_text,
+        result_keyboard,
+    )
+
+
 async def show_music_results(message, song, search_results_cache):
     mem("SHOW_START")
+
+    with timer("SEARCH_CACHE_GET"):
+        cached_results = search_cache_db.get_results(song)
+
+    if cached_results:
+        print(f"SEARCH_CACHE HIT ({len(cached_results)})")
+        await show_cached_search_results(
+            message,
+            cached_results,
+            search_results_cache
+        )
+        return
+
+    print("SEARCH_CACHE MISS")
+
     with timer("DB_SEARCH_BEFORE_SCRAPE"):
         db_results = db.search_musics_grouped_by_title(song, limit=10)
         mem("AFTER_DB_SEARCH")
@@ -278,27 +318,17 @@ async def show_music_results(message, song, search_results_cache):
     gc.collect()
     mem("AFTER_DELETE_MUSIC_INFO")
 
-    search_id = str(uuid.uuid4())
+    with timer("SEARCH_CACHE_SAVE"):
+        saved = search_cache_db.save_results(song, top_results)
+        print("SEARCH_CACHE SAVE:", saved)
 
-    mem("BEFORE_CACHE_SAVE")
-    search_results_cache[search_id] = {
-        "user_id": message.author.id,
-        "results": top_results,
-        "created_at": time.time()
-    }
-    mem("AFTER_CACHE_SAVE")
-    print("CACHE_SIZE:", len(search_results_cache))
-
-    result_text, result_keyboard = build_results_page(
-        search_id,
+    await show_cached_search_results(
+        message,
         top_results,
-        page=0,
+        search_results_cache
     )
 
-    await message.reply(
-        result_text,
-        result_keyboard,
-    )
+
 async def show_db_music_results(message, song, db_results, search_results_cache):
     search_id = str(uuid.uuid4())
 
