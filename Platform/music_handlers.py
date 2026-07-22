@@ -16,7 +16,11 @@ from utils.timer import timer
 
 from commands.ads import user_state
 from .bot_state import search_results_cache, get_user_lock, CACHE_TTL
-from web_scraping.scrape_runner import build_results_page, show_music_results
+from web_scraping.scrape_runner import (
+    build_results_page,
+    clean_display_song_name,
+    show_music_results,
+)
 from .bot_helpers import safe_answer_callback
 from .audio_downloader import safe_get_remote_size, send_music
 from .ad_runtime import send_ad_before_music
@@ -158,6 +162,7 @@ async def handle_music_callback(callback_query):
             return
 
         selected_music = results[index]
+        selected_music["name"] = clean_display_song_name(selected_music.get("name", ""))
         qualities = selected_music.get("qualities")
 
         if not qualities:
@@ -235,6 +240,7 @@ async def handle_quality_callback(callback_query, bot):
             return
 
         selected_music = results[index]
+        selected_music["name"] = clean_display_song_name(selected_music.get("name", ""))
         song_name = selected_music["name"]
 
         quality_info = selected_music["qualities"].get(quality)

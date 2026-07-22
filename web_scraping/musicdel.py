@@ -60,13 +60,23 @@ MUSICDEL_COOKIE = _strip_header_prefix(
     "Cookie",
 )
 MUSICDEL_PROXY_URL = _str_config("MUSICDEL_PROXY_URL", "") or None
-MUSICDEL_DETAIL_CONCURRENCY = _int_config("MUSICDEL_DETAIL_CONCURRENCY", 1, minimum=1)
-MIN_DETAIL_DELAY = _float_config("MUSICDEL_MIN_DETAIL_DELAY", 0.8, minimum=0.0)
-MAX_DETAIL_DELAY = _float_config("MUSICDEL_MAX_DETAIL_DELAY", 1.8, minimum=MIN_DETAIL_DELAY)
+MUSICDEL_DETAIL_CONCURRENCY = _int_config("MUSICDEL_DETAIL_CONCURRENCY", 2, minimum=1)
+MIN_DETAIL_DELAY = _float_config("MUSICDEL_MIN_DETAIL_DELAY", 0.15, minimum=0.0)
+MAX_DETAIL_DELAY = _float_config("MUSICDEL_MAX_DETAIL_DELAY", 0.5, minimum=MIN_DETAIL_DELAY)
 REQUEST_RETRIES = _int_config("MUSICDEL_REQUEST_RETRIES", 2, minimum=1)
 MUSICDEL_BLOCK_THRESHOLD = _int_config("MUSICDEL_BLOCK_THRESHOLD", 3, minimum=1)
-MUSICDEL_BLOCK_DELAY = _float_config("MUSICDEL_BLOCK_DELAY", 2.5, minimum=0.0)
+MUSICDEL_BLOCK_DELAY = _float_config("MUSICDEL_BLOCK_DELAY", 0.5, minimum=0.0)
 MUSICDEL_COOLDOWN_SECONDS = _int_config("MUSICDEL_COOLDOWN_SECONDS", 2 * 60, minimum=0)
+MUSICDEL_MAX_DETAIL_LINKS = _int_config("MUSICDEL_MAX_DETAIL_LINKS", 12, minimum=1)
+MUSICDEL_MAX_RESULTS = _int_config("MUSICDEL_MAX_RESULTS", 8, minimum=1)
+MUSICDEL_QUERY_TIMEOUT = _float_config("MUSICDEL_QUERY_TIMEOUT", 8.0, minimum=0.0)
+MUSICDEL_DETAIL_TIMEOUT = _float_config("MUSICDEL_DETAIL_TIMEOUT", 3.5, minimum=0.5)
+MUSICDEL_RETRY_DELAY_MIN = _float_config("MUSICDEL_RETRY_DELAY_MIN", 1.0, minimum=0.0)
+MUSICDEL_RETRY_DELAY_MAX = _float_config(
+    "MUSICDEL_RETRY_DELAY_MAX",
+    2.0,
+    minimum=MUSICDEL_RETRY_DELAY_MIN,
+)
 SEARCH_CACHE_TTL = _int_config("MUSICDEL_SEARCH_CACHE_TTL", 10 * 60, minimum=0)
 DETAIL_CACHE_TTL = _int_config("MUSICDEL_DETAIL_CACHE_TTL", 6 * 60 * 60, minimum=0)
 MAX_CACHE_ITEMS = _int_config("MUSICDEL_MAX_CACHE_ITEMS", 256, minimum=1)
@@ -218,11 +228,21 @@ async def _wait_before_detail_request():
     _last_detail_request_at = time.monotonic()
 
 
+def _query_time_left(started_at):
+    if MUSICDEL_QUERY_TIMEOUT <= 0:
+        return None
+    return MUSICDEL_QUERY_TIMEOUT - (time.monotonic() - started_at)
+
+
 async def _send_request(url, request_headers=None, is_detail=False):
     if is_detail:
         async with detail_semaphore:
             await _wait_before_detail_request()
-            return await client.get(url, headers=request_headers)
+            return await client.get(
+                url,
+                headers=request_headers,
+                timeout=MUSICDEL_DETAIL_TIMEOUT,
+            )
 
     async with scrape_semaphore:
         return await client.get(url, headers=request_headers)
@@ -258,7 +278,9 @@ async def _get_response(url, retries=REQUEST_RETRIES, request_headers=None, is_d
             if attempt >= retries:
                 print(f"musicdel request failed: {url}: {exc!r}")
                 return None
-            await asyncio.sleep(0.7 * attempt + random.uniform(0.1, 0.5))
+            await asyncio.sleep(
+                random.uniform(MUSICDEL_RETRY_DELAY_MIN, MUSICDEL_RETRY_DELAY_MAX)
+            )
 
 
 
@@ -388,21 +410,39 @@ async def process_search_query_get(query):
         return None
 
     results = {}
-    links = list(my_dict.values())
+    links = list(my_dict.values())[:MUSICDEL_MAX_DETAIL_LINKS]
     referer = f'{BASE_URL}/search/{quote(query)}'
+    started_at = time.monotonic()
 
     for link in links:
         if _cooldown_remaining() > 0:
             break
 
+        time_left = _query_time_left(started_at)
+        if time_left is not None and time_left <= 0:
+            print(f"musicdel query time budget exhausted: {query}")
+            break
+
         try:
-            response = await find_song(link, referer=referer)
+            if time_left is None:
+                response = await find_song(link, referer=referer)
+            else:
+                response = await asyncio.wait_for(
+                    find_song(link, referer=referer),
+                    timeout=min(MUSICDEL_DETAIL_TIMEOUT + 0.5, time_left),
+                )
+        except asyncio.TimeoutError:
+            print(f"musicdel detail timeout skipped: {link}")
+            continue
         except Exception as exc:
             print("musicdel find_song error:", repr(exc))
             continue
         if not response:
             continue
         results.update(response)
+
+        if len(results) >= MUSICDEL_MAX_RESULTS:
+            break
     return results
 
 

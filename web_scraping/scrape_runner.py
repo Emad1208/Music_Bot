@@ -31,9 +31,37 @@ try:
 except ValueError:
     DB_RESULT_THRESHOLD = 10
 
+try:
+    MUSICDEL_SAFE_TIMEOUT = float(config("MUSICDEL_SAFE_TIMEOUT", default=10))
+except ValueError:
+    MUSICDEL_SAFE_TIMEOUT = 10.0
+
 global_search_query = asyncio.Semaphore(5)
 MAX_SCRAPED_RESULTS = 10
 RESULTS_PER_PAGE = 5
+
+
+DISPLAY_QUALITY_PATTERN = re.compile(
+    r"(?i)(?:\b(?:64|96|128|192|256|320)\s*(?:kbps|k)?\b|\b(?:mp3|flac|wav|m4a|aac|ogg|webm)\b)"
+)
+DISPLAY_PERSIAN_QUALITY_PATTERN = re.compile(
+    r"(?:کیفیت|کيفيت)\s*(?:64|96|128|192|256|320)"
+)
+DISPLAY_EMPTY_BRACKETS_PATTERN = re.compile(r"[\[(]\s*[\])]")
+DISPLAY_TRAILING_SEPARATOR_PATTERN = re.compile(r"\s*[-–—|_/]+\s*$")
+
+
+def clean_display_song_name(name):
+    original = str(name or "").strip()
+    if not original:
+        return ""
+
+    cleaned = DISPLAY_PERSIAN_QUALITY_PATTERN.sub(" ", original)
+    cleaned = DISPLAY_QUALITY_PATTERN.sub(" ", cleaned)
+    cleaned = DISPLAY_EMPTY_BRACKETS_PATTERN.sub(" ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = DISPLAY_TRAILING_SEPARATOR_PATTERN.sub("", cleaned).strip()
+    return cleaned or original
 
 
 def build_results_page(search_id, results, page=0):
@@ -50,7 +78,7 @@ def build_results_page(search_id, results, page=0):
 
     for index in range(start, end):
         item = results[index]
-        button_text = item["name"][:60]
+        button_text = clean_display_song_name(item.get("name", ""))[:60]
         callback_data = f"music:{search_id}:{index}"
         buttons.append([(button_text, callback_data)])
 
@@ -85,12 +113,18 @@ def is_english_query(text):
     return bool(re.search(r'[a-zA-Z]', text))
 
 
-async def safe_search(name, func, song):
+async def safe_search(name, func, song, timeout=None):
     with timer(f"{name}_SCRAPE"):
         try:
-            result = await func(song)
+            if timeout and timeout > 0:
+                result = await asyncio.wait_for(func(song), timeout=timeout)
+            else:
+                result = await func(song)
             print(f"{name} result count:", len(result) if result else 0)
             return result or {}
+        except asyncio.TimeoutError:
+            print(f"{name} TIMEOUT after {timeout}s")
+            return {}
         except Exception as e:
             print(f"{name} ERROR:", e)
             return {}
@@ -124,7 +158,12 @@ async def process_search_query(song):
                 gisomusic = {}
 
                 music_del, beh_melody, musics_mehr = await asyncio.gather(
-                    safe_search("MUSIC_DEL", process_search_query_musicdel, song),
+                    safe_search(
+                        "MUSIC_DEL",
+                        process_search_query_musicdel,
+                        song,
+                        timeout=MUSICDEL_SAFE_TIMEOUT,
+                    ),
                     safe_search("BEHMELODY", process_search_query_behmelody, song),
                     safe_search("MUSICS_MEHR", process_search_query_musics_mehr, song),
                 )
@@ -136,7 +175,12 @@ async def process_search_query(song):
                     safe_search("MUSICS_WEB", process_search_query_musicsweb, song),
                     safe_search("UPMUSICS", process_search_query_upmusics, song),
                     safe_search("GISOMUSIC", process_search_query_gisomusic, song),
-                    safe_search("MUSIC_DEL", process_search_query_musicdel, song),
+                    safe_search(
+                        "MUSIC_DEL",
+                        process_search_query_musicdel,
+                        song,
+                        timeout=MUSICDEL_SAFE_TIMEOUT,
+                    ),
                     safe_search("BEHMELODY", process_search_query_behmelody, song),
                     safe_search("MUSICS_MEHR", process_search_query_musics_mehr, song),
                 )
