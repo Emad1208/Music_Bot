@@ -28,9 +28,21 @@ class Database:
             first_name TEXT,
             last_name TEXT,
             join_date DATETIME,
+            last_activity DATETIME,
             is_active INTEGER DEFAULT 1
         )
         """)
+
+        user_columns = {
+            row[1]
+            for row in self.cur.execute(
+                "PRAGMA table_info(users)"
+            ).fetchall()
+        }
+        if "last_activity" not in user_columns:
+            self.cur.execute(
+                "ALTER TABLE users ADD COLUMN last_activity DATETIME"
+            )
 
         self.cur.execute("""
         CREATE TABLE IF NOT EXISTS musics (
@@ -44,6 +56,26 @@ class Database:
         source_url TEXT,
         UNIQUE(title, quality)
                         )
+        """)
+
+        self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_music_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            music_id INTEGER,
+            title TEXT NOT NULL,
+            quality TEXT,
+            downloaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+            FOREIGN KEY (music_id)
+                REFERENCES musics(id)
+                ON DELETE SET NULL
+        )
+        """)
+
+        self.cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_history
+        ON user_music_history(user_id, downloaded_at DESC)
         """)
 
         self.cur.execute("""
@@ -267,13 +299,14 @@ class Database:
 
         self.cur.execute("""
         INSERT OR IGNORE INTO users
-        (user_id, username, first_name, last_name, join_date)
-        VALUES (?, ?, ?, ?, ?)
+        (user_id, username, first_name, last_name, join_date, last_activity)
+        VALUES (?, ?, ?, ?, ?, ?)
         """, (
             user_id,
             username,
             first_name,
             last_name,
+            join_date,
             join_date
         ))
 
@@ -294,11 +327,21 @@ class Database:
     def activate_user(self, user_id):
         query = """
         UPDATE users
-        SET is_active = 1
+        SET is_active = 1,
+            last_activity = CURRENT_TIMESTAMP
         WHERE user_id = ?
         """
 
         self.cur.execute(query, (user_id,))
+        self.con.commit()
+
+
+    def update_user_activity(self, user_id):
+        self.cur.execute("""
+        UPDATE users
+        SET last_activity = CURRENT_TIMESTAMP
+        WHERE user_id = ?
+        """, (user_id,))
         self.con.commit()
 
 
@@ -545,6 +588,77 @@ class Database:
         ))
 
         self.con.commit()
+
+
+    def get_music_id(self, title, quality):
+        self.cur.execute("""
+            SELECT id
+            FROM musics
+            WHERE title = ?
+            AND quality = ?
+        """, (title, quality))
+
+        row = self.cur.fetchone()
+        return row[0] if row else None
+
+
+    def add_user_music_history(
+            self,
+            user_id,
+            title,
+            quality=None,
+            music_id=None
+                    ):
+        title = (title or "").strip()
+        if not title:
+            return None
+
+        if music_id is None and quality is not None:
+            music_id = self.get_music_id(title, quality)
+
+        try:
+            self.cur.execute("""
+                INSERT INTO user_music_history
+                (user_id, music_id, title, quality)
+                VALUES (?, ?, ?, ?)
+            """, (
+                user_id,
+                music_id,
+                title,
+                quality
+            ))
+            history_id = self.cur.lastrowid
+
+            self.cur.execute("""
+                UPDATE users
+                SET last_activity = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+            """, (user_id,))
+
+            self.con.commit()
+            return history_id
+
+        except Exception:
+            self.con.rollback()
+            raise
+
+
+    def get_recent_user_music_history(self, user_id, limit=5):
+        self.cur.execute("""
+            SELECT
+                id,
+                user_id,
+                music_id,
+                title,
+                quality,
+                downloaded_at
+            FROM user_music_history
+            WHERE user_id = ?
+            ORDER BY downloaded_at DESC, id DESC
+            LIMIT ?
+        """, (user_id, limit))
+
+        return self.cur.fetchall()
 
 
     def get_musics_count(self):

@@ -243,7 +243,8 @@ async def send_music(
     title,
     artist,
     quality,
-    source=None
+    source=None,
+    user_id=None
 ):
     file_path = None
     fingerprint_job = None
@@ -375,6 +376,17 @@ async def send_music(
                 title=final_title,
                 quality=quality
             )
+
+            if user_id is not None:
+                try:
+                    db.add_user_music_history(
+                        user_id=user_id,
+                        music_id=music_id,
+                        title=final_title,
+                        quality=quality
+                    )
+                except Exception as e:
+                    print("DB_HISTORY_SAVE_ERROR:", repr(e))
 
             db.update_source_stats(
                 source=source,

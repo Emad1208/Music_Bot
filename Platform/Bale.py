@@ -30,6 +30,7 @@ from commands.send_msg import MSG_CALLBACKS, MSG_DYNAMIC_CALLBACKS
 from commands.state_handler import admin_states, handle_admin_message
 from commands.start import START_CALLBACKS
 from commands.callback_router import handle_start_callback
+from commands.recommendation import handle_recommend_music_callback
 from commands.channel import (
     channel_command,
     ensure_required_channel_membership,
@@ -234,6 +235,7 @@ async def handle_message(*, message):
 
     user_state.setdefault(user_id, {"state": None})
     state = user_state[user_id].get("state")
+    db.update_user_activity(user_id)
 
     print(f"User ID: {user_id} | State: {state}")
 
@@ -320,7 +322,8 @@ async def handle_message(*, message):
                         chat_id,
                         result["file_id"],
                         result["title"],
-                        result["quality"]
+                        result["quality"],
+                        user_id=user_id
                     )
 
                 finally:
@@ -350,6 +353,7 @@ async def answer_callback_query(callback_query):
     user_id = callback_query.author.id
 
     user_state.setdefault(user_id, {"state": None})
+    db.update_user_activity(user_id)
 
     if await handle_channel_callback(callback_query):
         return
@@ -368,6 +372,10 @@ async def answer_callback_query(callback_query):
 
     if data.startswith("quality:"):
         await handle_quality_callback(callback_query,bot)
+        return
+
+    if data == "recommend_music":
+        await handle_recommend_music_callback(callback_query)
         return
 
     if data.startswith("start_menu"):

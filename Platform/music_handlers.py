@@ -267,7 +267,8 @@ async def handle_quality_callback(callback_query, bot):
                 chat_id,
                 file_id,
                 song_name,
-                quality
+                quality,
+                user_id=user_id
             )
 
             return
@@ -291,7 +292,8 @@ async def handle_quality_callback(callback_query, bot):
                     chat_id,
                     file_id,
                     song_name,
-                    quality
+                    quality,
+                    user_id=user_id
                 )
 
                 return
@@ -303,7 +305,8 @@ async def handle_quality_callback(callback_query, bot):
                     url=file_url,
                     title=song_name,
                     artist="",
-                    quality=quality
+                    quality=quality,
+                    user_id=user_id
                 )
 
             print("send audio from url")
@@ -382,7 +385,8 @@ async def send_cached_music(
     chat_id,
     file_id,
     song_name,
-    quality=None
+    quality=None,
+    user_id=None
 ):
     try:
         with timer("SEND_FROM_DB"):
@@ -410,5 +414,16 @@ async def send_cached_music(
                 song_name,
                 quality
             )
+
+    if user_id is not None:
+        try:
+            with timer("DB_ADD_USER_HISTORY"):
+                db.add_user_music_history(
+                    user_id=user_id,
+                    title=song_name,
+                    quality=quality
+                )
+        except Exception as e:
+            print("DB_HISTORY_SAVE_ERROR_FROM_DB:", repr(e))
 
 
