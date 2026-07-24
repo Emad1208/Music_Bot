@@ -1,5 +1,5 @@
 import sqlite3
-
+import datetime
 
 class Database:
     def __init__(self, db_path):
@@ -201,6 +201,18 @@ class Database:
             """)
 
 
+        self.cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_subscriptions (
+                user_id INTEGER PRIMARY KEY,
+                is_premium INTEGER DEFAULT 0,
+                premium_expiry DATETIME,
+                recommendation_count INTEGER DEFAULT 0,
+                last_recommendation_date DATE,
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )
+            """)
+
+
         self.con.commit()
 
 # ---------------------
@@ -398,6 +410,77 @@ class Database:
         self.cur.execute(query)
 
         return self.cur.fetchone()[0] 
+
+    def check_recommendation_limit(self, user_id, daily_limit=3):
+        """
+        بررسی می‌کند که آیا کاربر مجاز به استفاده از پیشنهادگر هست یا خیر.
+        کاربران پرمیوم محدودیت ندارند.
+        """
+        today = datetime.date.today().isoformat()
+        
+        self.cur.execute("""
+            SELECT recommendation_count, last_recommendation_date, is_premium 
+            FROM user_subscriptions 
+            WHERE user_id = ?
+        """, (user_id,))
+        
+        row = self.cur.fetchone()
+        
+        if not row:
+            return True  # رکوردی ندارد، پس مجاز است
+            
+        req_count, last_req_date, is_premium = row
+        
+        # اگر کاربر پرمیوم است، همیشه مجاز است
+        if is_premium:
+            return True
+            
+        # اگر تاریخ آخرین درخواست مربوط به امروز نیست، محدودیت صفر شده است
+        if last_req_date != today:
+            return True
+            
+        # بررسی سقف مجاز روزانه
+        return req_count < daily_limit
+
+
+    def increment_recommendation_count(self, user_id):
+        """
+        یک واحد به تعداد استفاده روزانه کاربر اضافه می‌کند.
+        """
+        today = datetime.date.today().isoformat()
+        
+        self.cur.execute("""
+            SELECT recommendation_count, last_recommendation_date 
+            FROM user_subscriptions 
+            WHERE user_id = ?
+        """, (user_id,))
+        
+        row = self.cur.fetchone()
+        
+        if not row:
+            # ایجاد رکورد جدید برای اولین استفاده
+            self.cur.execute("""
+                INSERT INTO user_subscriptions (user_id, recommendation_count, last_recommendation_date) 
+                VALUES (?, 1, ?)
+            """, (user_id, today))
+        else:
+            req_count, last_req_date = row
+            if last_req_date != today:
+                # روز جدید است، ریست کردن کانتر
+                self.cur.execute("""
+                    UPDATE user_subscriptions 
+                    SET recommendation_count = 1, last_recommendation_date = ? 
+                    WHERE user_id = ?
+                """, (today, user_id))
+            else:
+                # همان روز است، افزایش کانتر
+                self.cur.execute("""
+                    UPDATE user_subscriptions 
+                    SET recommendation_count = recommendation_count + 1 
+                    WHERE user_id = ?
+                """, (user_id,))
+                
+        self.con.commit()
 
 # ---------------------
 # Admin Funcs
