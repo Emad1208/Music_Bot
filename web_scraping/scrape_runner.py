@@ -164,7 +164,12 @@ async def process_search_query(song):
                         song,
                         timeout=MUSICDEL_SAFE_TIMEOUT,
                     ),
-                    safe_search("BEHMELODY", process_search_query_behmelody, song),
+                    safe_search(
+                        "BEHMELODY", 
+                        process_search_query_behmelody, 
+                        song, 
+                        timeout=10.0  # اضافه کردن تایم اوت مشابه موزیک‌دل
+                    ),
                     safe_search("MUSICS_MEHR", process_search_query_musics_mehr, song),
                 )
 

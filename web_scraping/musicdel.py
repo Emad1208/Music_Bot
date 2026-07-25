@@ -414,35 +414,46 @@ async def process_search_query_get(query):
     referer = f'{BASE_URL}/search/{quote(query)}'
     started_at = time.monotonic()
 
-    for link in links:
+    # تعریف یک تابع داخلی برای پردازش هر لینک به همراه تایم‌اوت
+    async def fetch_link_data(link):
         if _cooldown_remaining() > 0:
-            break
-
+            return None
+            
         time_left = _query_time_left(started_at)
         if time_left is not None and time_left <= 0:
             print(f"musicdel query time budget exhausted: {query}")
-            break
+            return None
 
         try:
             if time_left is None:
-                response = await find_song(link, referer=referer)
+                return await find_song(link, referer=referer)
             else:
-                response = await asyncio.wait_for(
+                return await asyncio.wait_for(
                     find_song(link, referer=referer),
                     timeout=min(MUSICDEL_DETAIL_TIMEOUT + 0.5, time_left),
                 )
         except asyncio.TimeoutError:
             print(f"musicdel detail timeout skipped: {link}")
-            continue
+            return None
         except Exception as exc:
             print("musicdel find_song error:", repr(exc))
-            continue
+            return None
+
+    # اجرای همزمان تمامی درخواست‌ها با استفاده از asyncio.gather
+    tasks = [fetch_link_data(link) for link in links]
+    responses = await asyncio.gather(*tasks)
+
+    # آپدیت کردن نتایج
+    for response in responses:
         if not response:
             continue
+            
         results.update(response)
-
+        
+        # بررسی سقف تعداد نتایج مجاز
         if len(results) >= MUSICDEL_MAX_RESULTS:
             break
+
     return results
 
 
