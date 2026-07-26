@@ -29,7 +29,7 @@ from commands.owner import OWNER_CALLBACKS , OWNER_DYNAMIC_CALLBACKS
 from commands.send_msg import MSG_CALLBACKS, MSG_DYNAMIC_CALLBACKS
 from commands.state_handler import admin_states, handle_admin_message
 from commands.start import START_CALLBACKS
-from commands.callback_router import handle_start_callback
+from commands.callback_router import handle_start_callback, handle_weekly_top_callback
 from commands.recommendation import handle_recommend_music_callback
 from commands.channel import (
     channel_command,
@@ -40,6 +40,7 @@ from commands.channel import (
 from fprint.service import get_audio_file_id, identify_message_audio
 from fprint.queue import start_fingerprint_queue, stop_fingerprint_queue
 
+from .weekly_task import setup_scheduler
 from .bot_helpers import start_message, cleanup_search_cache
 from .audio_downloader import close_download_client ,close_download_client_no_ssl
 from .bot_state import get_user_lock
@@ -66,8 +67,15 @@ bot = Client(token)
 
 
 @bot.on_initialize()
-async def initialize_fingerprint_queue():
+async def initialize_tasks():
+    # Start the audio fingerprint queue system
     await start_fingerprint_queue()
+    
+    # Create a background task to clean up the search cache
+    asyncio.create_task(cleanup_search_cache())
+    
+    # Initialize the APScheduler (it will now successfully find the running event loop)
+    setup_scheduler(bot)
 
 
 @bot.on_shutdown()
@@ -378,6 +386,11 @@ async def answer_callback_query(callback_query):
         await handle_recommend_music_callback(callback_query)
         return
 
+    # Handle weekly top 10 inline buttons
+    if data.startswith("weektp:"):
+        await handle_weekly_top_callback(callback_query, bot)
+        return
+
     if data.startswith("start_menu"):
         await handle_start_callback(callback_query)
         return
@@ -438,9 +451,6 @@ def bot_run():
 
     try:
         print("Bot is running...")
-
-        loop = asyncio.get_event_loop()
-        loop.create_task(cleanup_search_cache())
 
         bot.run()
 

@@ -792,6 +792,31 @@ class Database:
             }
 
         return list(grouped.values())[:limit]
+    
+
+    def get_weekly_top_musics(self, limit=10):
+        """دریافت لیست پردانلودترین آهنگ‌ها در ۷ روز گذشته"""
+        query = """
+            SELECT title, COUNT(*) as weekly_downloads
+            FROM user_music_history
+            WHERE downloaded_at >= datetime('now', '-7 days')
+            GROUP BY title
+            ORDER BY weekly_downloads DESC
+            LIMIT ?
+        """
+        self.cur.execute(query, (limit,))
+        return self.cur.fetchall()
+    
+
+    def cleanup_old_history(self, days=30):
+        """حذف تاریخچه دانلودهای قدیمی‌تر از تعداد روز مشخص شده"""
+        query = """
+            DELETE FROM user_music_history 
+            WHERE downloaded_at <= datetime('now', ?)
+        """
+        self.cur.execute(query, (f'-{days} days',))
+        self.con.commit()
+        return self.cur.rowcount
 # ---------------------
 # Ads Funcs
 # ---------------------      
