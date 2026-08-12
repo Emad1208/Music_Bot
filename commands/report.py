@@ -47,7 +47,8 @@ def build_bot_report():
         "🎵 موسیقی\n"
         "━━━━━━━━━━━━━━\n"
         f"🎼 آهنگ‌های ذخیره شده: {db.get_musics_count()}\n"
-        f"📤 کل آهنگ‌های ارسال شده: {db.get_sended_musics_count()}\n\n"
+        f"📤 کل آهنگ‌های ارسال شده: {db.get_sended_musics_count()}\n"
+        f"🔍 تعداد اهنگ های fprint گرفته شده: {db.get_fingerprinted_musics_count()}\n\n"
 
         "━━━━━━━━━━━━━━\n"
         "📢 تبلیغات\n"

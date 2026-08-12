@@ -36,13 +36,14 @@ async def send_weekly_top_musics(bot):
         for user in users:
             user_id = user[0]
             try:
-                await bot.send_photo(
-                    photo = '962702339:-1612906092269789440:1:38c87cea41d6b6013632769199368edd3c7b7805ace94705',
+                await bot.send_video(
+                    video = '962702339:5656250797157523203:0:cfe1f8543d7fe5581e76276b2d940c7e9332d64381b494e8014eb5342f463e77a3ba95a1013da9e56b5055903f4e4f6b220dbf5ee590e009',
                     chat_id = user_id,
                     caption = text,
                     reply_markup=markup)
                 success_count += 1
             except Exception:
+                print(f"Failed to send weekly top 10 to user {user_id}.")
                 pass
             # Short delay to prevent flooding and bot blocking
             await asyncio.sleep(0.05) 

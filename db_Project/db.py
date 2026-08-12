@@ -1183,6 +1183,17 @@ class Database:
         """, (music_id, engine))
 
         return self.cur.fetchone() is not None
+    
+
+    def get_fingerprinted_musics_count(self):
+        query = """
+        SELECT COUNT(DISTINCT music_id)
+        FROM music_fingerprints
+        """
+
+        self.cur.execute(query)
+
+        return self.cur.fetchone()[0]
 
 
 # ---------------------
