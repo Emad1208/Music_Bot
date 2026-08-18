@@ -50,6 +50,9 @@ from .music_handlers import (
     handle_results_page_callback,
     handle_song_name,
     send_cached_music,
+    handle_scsearch_callback,    
+    handle_scdl_callback,
+    handle_scpage_callback      
 )
 from .shutdown import (
     install_shutdown_signal_handlers,
@@ -369,6 +372,16 @@ async def answer_callback_query(callback_query):
     if not await ensure_required_channel_membership(callback_query):
         return
 
+    # Soundclaude Handlers
+    if data.startswith("scsearch:"):
+        await handle_scsearch_callback(callback_query, bot)
+        return
+        
+    if data.startswith("scdl:"):
+        await handle_scdl_callback(callback_query, bot)
+        return
+   
+
     # music result callbacks
     if data.startswith("results_page:"):
         await handle_results_page_callback(callback_query)
@@ -393,6 +406,10 @@ async def answer_callback_query(callback_query):
 
     if data.startswith("start_menu"):
         await handle_start_callback(callback_query)
+
+    if data.startswith("scpage:"):
+        await handle_scpage_callback(callback_query, bot)
+        
         return
 
     # start menu callbacks

@@ -2,6 +2,10 @@ import httpx
 import traceback
 import time
 from balethon.objects import InlineKeyboard
+import os
+import uuid
+from soundcloud.search import search_tracks
+from soundcloud.download import download_track
 
 from dictation.similar_remove_text import only_removing
 
@@ -24,8 +28,14 @@ from web_scraping.scrape_runner import (
 from .bot_helpers import safe_answer_callback
 from .audio_downloader import safe_get_remote_size, send_music
 from .ad_runtime import send_ad_before_music
-from fprint.queue import submit_fingerprint_job
+from fprint.queue import stage_fingerprint_job, submit_fingerprint_job
 
+# Dictionary to cache SoundCloud links (bypassing the 64-byte limit of buttons)
+sc_links_cache = {}
+# New cache to hold search results list for pagination
+sc_search_cache = {}
+
+RESULTS_PER_PAGE = 5  # Number of buttons per page
 
 async def handle_song_name(message, bot):
     user_id = message.author.id
@@ -427,3 +437,173 @@ async def send_cached_music(
             print("DB_HISTORY_SAVE_ERROR_FROM_DB:", repr(e))
 
 
+
+def build_sc_results_page(search_id, results_list, page=0):
+    if not results_list:
+        raise ValueError("results cannot be empty")
+
+    total_pages = (len(results_list) + RESULTS_PER_PAGE - 1) // RESULTS_PER_PAGE
+    if page < 0 or page >= total_pages:
+        raise ValueError("invalid results page")
+
+    start = page * RESULTS_PER_PAGE
+    end = min(start + RESULTS_PER_PAGE, len(results_list))
+    buttons = []
+
+    # Build song buttons
+    for index in range(start, end):
+        item = results_list[index]
+        button_text = item["name"][:60]
+        # Reference short ID for downloading
+        callback_data = f"scdl:{item['short_id']}"
+        buttons.append([(button_text, callback_data)])
+
+    # Build navigation buttons (Previous/Next)
+    navigation = []
+    if page > 0:
+        navigation.append(("⬅️ قبلی", f"scpage:{search_id}:{page - 1}"))
+    if page + 1 < total_pages:
+        navigation.append(("بعدی ➡️", f"scpage:{search_id}:{page + 1}"))
+        
+    if navigation:
+        buttons.append(navigation)
+
+    text = "*نتایج یافت شده در جستجوی پیشرفته*\nیکی از گزینه‌های زیر را انتخاب کنید:"
+    return text, InlineKeyboard(*buttons)
+
+async def handle_scsearch_callback(callback_query, bot):
+    print("SC_SEARCH CALLBACK")
+    data = callback_query.data
+    _, query = data.split(":", 1)
+    
+    await safe_answer_callback(callback_query, "در حال جستجو پیشرفته")
+    loading_msg = await callback_query.message.reply("🔍 در حال جستوجو لطفا کمی صبر کنید")
+    
+    results = await search_tracks(query)
+    
+    if not results:
+        await loading_msg.edit_text("متاسفانه موردی پیدا نشد!")
+        return
+        
+    # Generate a unique ID for this entire search session
+    search_id = str(uuid.uuid4())[:8]
+    results_list = []
+    
+    for clean_name, url in results.items():
+        short_id = str(uuid.uuid4())[:8]
+        # Cache the link for the download phase
+        sc_links_cache[short_id] = {"url": url, "name": clean_name}
+        # Append to the results list for pagination
+        results_list.append({"name": clean_name, "short_id": short_id})
+        
+    # Cache all results for page pagination
+    sc_search_cache[search_id] = {
+        "created_at": time.time(),
+        "items": results_list
+    }
+    
+    # Build page 0 (first page)
+    text, keyboard = build_sc_results_page(search_id, results_list, page=0)
+    await loading_msg.edit_text(text, keyboard)
+
+
+async def handle_scpage_callback(callback_query, bot):
+    print("SC_PAGE CALLBACK")
+    data = callback_query.data
+    _, search_id, page = data.split(":")
+    page = int(page)
+
+    # Retrieve data from search cache
+    cache_data = sc_search_cache.get(search_id)
+    
+    if not cache_data:
+        await safe_answer_callback(callback_query, "❌ این نتیجه منقضی شده است. لطفا دوباره سرچ کنید.", show_alert=True)
+        return
+
+    await safe_answer_callback(callback_query, "در حال بارگذاری...")
+
+    try:
+        items = cache_data["items"]
+        text, keyboard = build_sc_results_page(search_id, items, page)
+        await callback_query.message.edit_text(text, keyboard)
+    except Exception as e:
+        print(f"SC_PAGE Error: {e}")
+        await callback_query.message.reply("❌ خطا در نمایش صفحات ساندکلاد.")
+
+
+async def handle_scdl_callback(callback_query, bot):
+    print("SC_DOWNLOAD CALLBACK")
+    data = callback_query.data
+    user_id = callback_query.author.id
+    chat_id = callback_query.message.chat.id
+    
+    _, short_id = data.split(":", 1)
+    
+    cache_data = sc_links_cache.get(short_id)
+    if not cache_data:
+        await safe_answer_callback(callback_query, "این جستجو منقضی شده است. لطفا دوباره سرچ کنید.")
+        return
+        
+    url = cache_data["url"]
+    clean_name = cache_data["name"]
+    
+    await safe_answer_callback(callback_query, "در حال دانلود آهنگ... ممکن است کمی طول بکشد.")
+    loading_msg = await callback_query.message.reply(f"⏳ در حال دریافت فایل صوتی `{clean_name}` از سرور...")
+    
+    # Execute the SoundCloud download script
+    file_path, _ = await download_track(url)
+    fingerprint_job = None
+    
+    if file_path and os.path.exists(file_path):
+        try:
+            # 1. Send file in Bale
+            with open(file_path, "rb") as f:
+                send_message = await bot.send_audio(
+                    chat_id,
+                    audio=f,
+                    title=clean_name,
+                    caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
+                )
+            
+            await loading_msg.delete()
+            
+            # 2. Save into database (similar to audio_downloader module)
+            word_db.add_confirmed_music_text(clean_name, source="soundcloud")
+            
+            file_size = os.path.getsize(file_path)
+            music_id = db.add_music(
+                title=clean_name,
+                quality="128", 
+                file_id=send_message.audio.id,
+                file_size=file_size,
+                source="soundcloud",
+                source_url=url
+            )
+            
+            db.increase_download_count(clean_name, "128")
+            
+            try:
+                db.add_user_music_history(user_id=user_id, music_id=music_id, title=clean_name, quality="128")
+            except Exception as e:
+                print("DB_HISTORY_SAVE_ERROR:", repr(e))
+                
+            # 3. Prepare fingerprint (stage the file into fingerprint queue)
+            if music_id:
+                fingerprint_job = stage_fingerprint_job(music_id, file_path)
+
+        except Exception as e:
+            print(f"SC_DL Error: {e}")
+            await loading_msg.edit_text("❌ خطا در ارسال فایل صوتی.")
+            
+        finally:
+            # 4. Permanently remove the temporary file from server disk
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"SC_TEMP_FILE DELETED: {file_path}")
+            
+            # 5. Start fingerprinting process after sending and deleting the temporary file
+            if fingerprint_job:
+                submit_fingerprint_job(fingerprint_job)
+                
+    else:
+        await loading_msg.edit_text("❌ متاسفانه دانلود فایل با خطا مواجه شد.")

@@ -322,6 +322,20 @@ async def show_cached_search_results(message, results, search_results_cache):
     )
 
 
+async def send_advanced_search_button(message, song_query):
+    """Helper function to send message and SoundCloud advanced search button"""
+    safe_query = song_query[:40] 
+    
+    keyboard = InlineKeyboard(
+        [("جستجوی پیشرفته 🔍", f"scsearch:{safe_query}")]
+    )
+    
+    await message.reply(
+        "اگر آهنگت رو پیدا نکردی، روی دکمه زیر بزن:", 
+        keyboard
+    )
+
+
 async def show_music_results(message, song, search_results_cache):
     mem("SHOW_START")
 
@@ -335,6 +349,8 @@ async def show_music_results(message, song, search_results_cache):
             cached_results,
             search_results_cache
         )
+        # Add SoundCloud button
+        await send_advanced_search_button(message, song)
         return
 
     print("SEARCH_CACHE MISS")
@@ -342,6 +358,7 @@ async def show_music_results(message, song, search_results_cache):
     with timer("DB_SEARCH_BEFORE_SCRAPE"):
         db_results = db.search_musics_grouped_by_title(song, limit=10)
         mem("AFTER_DB_SEARCH")
+        
     if db_results:
         if len(db_results) >= DB_RESULT_THRESHOLD:
             print(f"DB HIT ({len(db_results)})")
@@ -351,6 +368,8 @@ async def show_music_results(message, song, search_results_cache):
                 db_results,
                 search_results_cache
             )
+            # Add SoundCloud button
+            await send_advanced_search_button(message, song)
             return
 
         print(f"DB MISS ({len(db_results)}) -> SCRAPE")
@@ -359,7 +378,15 @@ async def show_music_results(message, song, search_results_cache):
     mem("AFTER_PROCESS_SEARCH_QUERY")
 
     if not music_info:
-        await message.reply("موردی پیدا نشد!")
+        # Update message if the song is not found and send button
+        safe_query = song[:40]
+        keyboard = InlineKeyboard(
+            [("جستجوی پیشرفته 🔍", f"scsearch:{safe_query}")]
+        )
+        await message.reply(
+            "موردی پیدا نشد! اما می‌تونی جستجوی پیشرفته رو امتحان کنی:", 
+            keyboard
+        )
         return
 
     top_results = music_info[:MAX_SCRAPED_RESULTS]
@@ -377,7 +404,10 @@ async def show_music_results(message, song, search_results_cache):
         search_results_cache
     )
 
+    # Add SoundCloud button at the end of scraping
+    await send_advanced_search_button(message, song)
 
+    
 async def show_db_music_results(message, song, db_results, search_results_cache):
     search_id = str(uuid.uuid4())
 
