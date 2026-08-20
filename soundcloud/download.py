@@ -18,21 +18,23 @@ def _sync_download(url: str) -> str | None:
     """
     # Configuration options for yt-dlp
     ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(DOWNLOAD_DIR, 'track_%(id)s.%(ext)s'),
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'quiet': True,
-        'no_warnings': True,
-        
-        # --- Timeout and retry settings ---
-        'socket_timeout': 60,       # Increase socket timeout from 20 to 60 seconds
-        'extractor_retries': 3,     # Retry up to 3 times on connection drop
-        # ----------------------------------
-    }
+            'format': 'bestaudio/best',
+            'outtmpl': os.path.join(DOWNLOAD_DIR, 'track_%(id)s.%(ext)s'),
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'quiet': True,
+            'no_warnings': True,
+            
+            # --- Prevent saving partial/incomplete files ---
+            'nopart': True,             
+            # ----------------------------------------------
+            
+            'socket_timeout': 60,       
+            'extractor_retries': 3,     
+        }
 
     # Add proxy only if configured
     if LOCAL_PROXY:

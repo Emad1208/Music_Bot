@@ -52,7 +52,8 @@ from .music_handlers import (
     send_cached_music,
     handle_scsearch_callback,    
     handle_scdl_callback,
-    handle_scpage_callback      
+    handle_scpage_callback,
+    handle_scquality_callback      
 )
 from .shutdown import (
     install_shutdown_signal_handlers,
@@ -379,6 +380,10 @@ async def answer_callback_query(callback_query):
         
     if data.startswith("scdl:"):
         await handle_scdl_callback(callback_query, bot)
+        return
+
+    if data.startswith("scq:"):
+        await handle_scquality_callback(callback_query, bot)
         return
    
 

@@ -1,12 +1,14 @@
 import httpx
 import traceback
 import time
-from balethon.objects import InlineKeyboard
+from balethon.objects import InlineKeyboard, InlineKeyboardButton
 import os
 import uuid
 from soundcloud.search import search_tracks
 from soundcloud.download import download_track
-
+from db_cache_scrape import search_cache_db
+import asyncio
+import yt_dlp
 from dictation.similar_remove_text import only_removing
 
 from db_Project.db_init import db, word_db
@@ -36,6 +38,9 @@ sc_links_cache = {}
 sc_search_cache = {}
 
 RESULTS_PER_PAGE = 5  # Number of buttons per page
+# --- Semaphore for global concurrent SoundCloud download limit (maximum 4 concurrent downloads bot-wide) ---
+sc_download_semaphore = asyncio.Semaphore(4)
+# ----------------------------------------------------------------------------------------------------------
 
 async def handle_song_name(message, bot):
     user_id = message.author.id
@@ -471,6 +476,7 @@ def build_sc_results_page(search_id, results_list, page=0):
     text = "*نتایج یافت شده در جستجوی پیشرفته*\nیکی از گزینه‌های زیر را انتخاب کنید:"
     return text, InlineKeyboard(*buttons)
 
+
 async def handle_scsearch_callback(callback_query, bot):
     print("SC_SEARCH CALLBACK")
     data = callback_query.data
@@ -479,30 +485,55 @@ async def handle_scsearch_callback(callback_query, bot):
     await safe_answer_callback(callback_query, "در حال جستجو پیشرفته")
     loading_msg = await callback_query.message.reply("🔍 در حال جستوجو لطفا کمی صبر کنید")
     
-    results = await search_tracks(query)
+    # Add a prefix to the query to avoid conflict with Iranian sites cache
+    sc_query = f"soundcloud {query}"
     
-    if not results:
-        await loading_msg.edit_text("متاسفانه موردی پیدا نشد!")
-        return
+    # 1. Check if the query exists in the database cache
+    raw_results = search_cache_db.get_results(sc_query)
+    
+    if raw_results:
+        # Cache Hit: Results found in database
+        print(f"SC_CACHE HIT ({len(raw_results)})")
+    else:
+        # Cache Miss: Scrape SoundCloud
+        print("SC_CACHE MISS -> SCRAPE SOUNDCLOUD")
+        results_dict = await search_tracks(query)
         
-    # Generate a unique ID for this entire search session
+        if not results_dict:
+            await loading_msg.edit_text("متاسفانه در جستجوی پیشرفته هم موردی پیدا نشد!")
+            return
+            
+        # Convert dictionary to a list of dicts because search_cache_db expects a list[cite: 12]
+        raw_results = [{"name": name, "url": url} for name, url in results_dict.items()]
+        
+        # Save the newly scraped results into the database cache[cite: 12]
+        saved = search_cache_db.save_results(sc_query, raw_results)
+        print(f"SC_CACHE SAVE: {saved}")
+        
+    # 2. Process results for pagination and 64-byte Telegram/Bale limits
     search_id = str(uuid.uuid4())[:8]
     results_list = []
     
-    for clean_name, url in results.items():
+    for item in raw_results:
+        clean_name = item["name"]
+        url = item["url"]
+        
+        # Generate a short ID for the callback data
         short_id = str(uuid.uuid4())[:8]
-        # Cache the link for the download phase
+        
+        # Store the real URL in RAM cache for the download phase
         sc_links_cache[short_id] = {"url": url, "name": clean_name}
-        # Append to the results list for pagination
+        
+        # Append to the list used for pagination buttons
         results_list.append({"name": clean_name, "short_id": short_id})
         
-    # Cache all results for page pagination
+    # Store the entire processed list in RAM cache for page navigation
     sc_search_cache[search_id] = {
         "created_at": time.time(),
         "items": results_list
     }
     
-    # Build page 0 (first page)
+    # 3. Build and display the first page of results
     text, keyboard = build_sc_results_page(search_id, results_list, page=0)
     await loading_msg.edit_text(text, keyboard)
 
@@ -517,7 +548,8 @@ async def handle_scpage_callback(callback_query, bot):
     cache_data = sc_search_cache.get(search_id)
     
     if not cache_data:
-        await safe_answer_callback(callback_query, "❌ این نتیجه منقضی شده است. لطفا دوباره سرچ کنید.", show_alert=True)
+        # Important update: behaves exactly like the bot's main search
+        await callback_query.message.reply("❌ نتیجه منقضی شده، دوباره سرچ کن.")
         return
 
     await safe_answer_callback(callback_query, "در حال بارگذاری...")
@@ -531,8 +563,75 @@ async def handle_scpage_callback(callback_query, bot):
         await callback_query.message.reply("❌ خطا در نمایش صفحات ساندکلاد.")
 
 
+
+def _get_sc_size_sync(url: str):
+    """Sync function to fetch SoundCloud track size without downloading"""
+    ydl_opts = {
+        'quiet': True, 
+        'no_warnings': True,
+        'proxy': "http://127.0.0.1:10808" # Keep proxy if running locally, otherwise None
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            # Try to get exact size or approximate size
+            size = info.get('filesize') or info.get('filesize_approx')
+            if size:
+                return round((size / (1024 * 1024)*2), 2)
+    except Exception as e:
+        print(f"Error fetching SC size: {e}")
+    return None
+
+
+
+async def get_sc_size(url: str):
+    """Async wrapper to prevent blocking the bot while fetching size"""
+    return await asyncio.to_thread(_get_sc_size_sync, url)
+
+
 async def handle_scdl_callback(callback_query, bot):
-    print("SC_DOWNLOAD CALLBACK")
+    """Step 1: Show quality button and file size when a track is clicked"""
+    print("SC_TRACK_SELECT CALLBACK")
+    data = callback_query.data
+    _, short_id = data.split(":", 1)
+    
+    cache_data = sc_links_cache.get(short_id)
+    if not cache_data:
+        await callback_query.message.reply("❌ این نتیجه منقضی شده است. لطفا دوباره سرچ کنید.")
+        return
+        
+    url = cache_data["url"]
+    clean_name = cache_data["name"]
+
+    await safe_answer_callback(callback_query, "در حال دریافت اطلاعات آهنگ...")
+    
+    # Get remote size using yt-dlp without downloading
+    size_mb = await get_sc_size(url)
+    
+    # --- NEW: Save the size in the cache so we can check it before downloading ---
+    cache_data["size"] = size_mb
+    # -----------------------------------------------------------------------------
+    
+    # Format button text according to size and 20MB limit
+    if size_mb:
+        if size_mb > 20:
+            btn_text = f"کیفیت 320 - {size_mb} MB ⚠️"
+        else:
+            btn_text = f"کیفیت 320 - {size_mb} MB"
+    else:
+        btn_text = "کیفیت 320"
+    
+    await callback_query.message.reply(
+        f"🎵 کیفیت مورد نظر را انتخاب کنید:\n*{clean_name}*",
+        InlineKeyboard(
+            [(btn_text, f"scq:{short_id}")]
+        )
+    )
+
+
+async def handle_scquality_callback(callback_query, bot):
+    """Step 2: Handle quality click, apply locks, download, and send"""
+    print("SC_QUALITY CALLBACK")
     data = callback_query.data
     user_id = callback_query.author.id
     chat_id = callback_query.message.chat.id
@@ -541,69 +640,145 @@ async def handle_scdl_callback(callback_query, bot):
     
     cache_data = sc_links_cache.get(short_id)
     if not cache_data:
-        await safe_answer_callback(callback_query, "این جستجو منقضی شده است. لطفا دوباره سرچ کنید.")
+        await callback_query.message.reply("❌ این نتیجه منقضی شده است. لطفا دوباره سرچ کنید.")
         return
         
     url = cache_data["url"]
     clean_name = cache_data["name"]
-    
-    await safe_answer_callback(callback_query, "در حال دانلود آهنگ... ممکن است کمی طول بکشد.")
-    loading_msg = await callback_query.message.reply(f"⏳ در حال دریافت فایل صوتی `{clean_name}` از سرور...")
-    
-    # Execute the SoundCloud download script
-    file_path, _ = await download_track(url)
-    fingerprint_job = None
-    
-    if file_path and os.path.exists(file_path):
-        try:
-            # 1. Send file in Bale
-            with open(file_path, "rb") as f:
-                send_message = await bot.send_audio(
-                    chat_id,
-                    audio=f,
-                    title=clean_name,
-                    caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
-                )
-            
-            await loading_msg.delete()
-            
-            # 2. Save into database (similar to audio_downloader module)
-            word_db.add_confirmed_music_text(clean_name, source="soundcloud")
-            
-            file_size = os.path.getsize(file_path)
-            music_id = db.add_music(
-                title=clean_name,
-                quality="128", 
-                file_id=send_message.audio.id,
-                file_size=file_size,
-                source="soundcloud",
-                source_url=url
-            )
-            
-            db.increase_download_count(clean_name, "128")
-            
-            try:
-                db.add_user_music_history(user_id=user_id, music_id=music_id, title=clean_name, quality="128")
-            except Exception as e:
-                print("DB_HISTORY_SAVE_ERROR:", repr(e))
-                
-            # 3. Prepare fingerprint (stage the file into fingerprint queue)
-            if music_id:
-                fingerprint_job = stage_fingerprint_job(music_id, file_path)
+    size_mb = cache_data.get("size") # --- NEW: Retrieve size from cache ---
 
-        except Exception as e:
-            print(f"SC_DL Error: {e}")
-            await loading_msg.edit_text("❌ خطا در ارسال فایل صوتی.")
+    # ==============================================================
+    # 1. User Lock (Spam Prevention)
+    # ==============================================================
+    lock = get_user_lock(user_id)
+    if lock.locked():
+        await callback_query.message.reply("⏳ شما یک درخواست در حال پردازش دارید. لطفاً تا پایان آن صبر کنید.")
+        return
+
+    await lock.acquire()
+    
+    try:
+        # --- NEW: Check if file is too large before doing anything ---
+        if size_mb and size_mb > 20:
+            await safe_answer_callback(callback_query, "حجم فایل زیاد است، ارسال لینک مستقیم...")
             
-        finally:
-            # 4. Permanently remove the temporary file from server disk
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                print(f"SC_TEMP_FILE DELETED: {file_path}")
+            button_text = f"{size_mb} MB 🔗 دانلود مستقیم آهنگ"
+            await bot.send_message(
+                chat_id,
+                f"❌ حجم فایل بیشتر از محدودیت بله است.\n\n"
+                f"🎵 {clean_name}\n\n"
+                f"برای دانلود مستقیم روی دکمه زیر بزن:",
+                InlineKeyboard([
+                    InlineKeyboardButton(button_text, url=url)
+                ])
+            )
+            return # Exit immediately! No DB check, no downloading.
+        # -------------------------------------------------------------
+
+        await safe_answer_callback(callback_query, "در حال بررسی اطلاعات آهنگ...")
+
+        # --- Check DB for Cache Hit ---
+        with timer("DB_GET_FILE_ID_SC"):
+            file_id = db.get_music_file_id(clean_name, "320")
+
+        if file_id:
+            print(f"SC_DB HIT: Sending cached file for {clean_name}")
+            with timer("SEND_AD_SC"):
+                await send_ad_before_music(bot, chat_id)
+
+            await send_cached_music(
+                bot=bot,
+                chat_id=chat_id,
+                file_id=file_id,
+                song_name=clean_name,
+                quality="320",
+                user_id=user_id
+            )
+            return  
+
+        # ==============================================================
+        # 2. Server Semaphore and Downloading
+        # ==============================================================
+        loading_msg = await callback_query.message.reply(f"⏳ در حال آماده سازی آهنگ *{clean_name}* ...")
+        
+        async with sc_download_semaphore:
+            file_path, _ = await download_track(url)
             
-            # 5. Start fingerprinting process after sending and deleting the temporary file
-            if fingerprint_job:
-                submit_fingerprint_job(fingerprint_job)
+        fingerprint_job = None
+        
+        if file_path and os.path.exists(file_path):
+            try:
+                # Fallback: Check local file size after download just in case the estimation was wrong
+                local_size_mb = round(os.path.getsize(file_path) / (1024 * 1024), 2)
                 
-    else:
-        await loading_msg.edit_text("❌ متاسفانه دانلود فایل با خطا مواجه شد.")
+                if local_size_mb > 20:
+                    await loading_msg.delete()
+                    button_text = f"{local_size_mb} MB 🔗 دانلود مستقیم آهنگ"
+                    await bot.send_message(
+                        chat_id,
+                        f"❌ حجم فایل بیشتر از محدودیت بله است.\n\n"
+                        f"🎵 {clean_name}\n\n"
+                        f"برای دانلود مستقیم روی دکمه زیر بزن:",
+                        InlineKeyboard([
+                            InlineKeyboardButton(button_text, url=url)
+                        ])
+                    )
+                    return 
+                
+                with timer("SEND_AD_SC"):
+                    await send_ad_before_music(bot, chat_id)
+
+                # Send file in Bale
+                with open(file_path, "rb") as f:
+                    send_message = await bot.send_audio(
+                        chat_id,
+                        audio=f,
+                        title=clean_name,
+                        caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
+                    )
+                
+                await loading_msg.delete()
+                
+                # Save into database
+                word_db.add_confirmed_music_text(clean_name, source="soundcloud")
+                
+                file_size = os.path.getsize(file_path)
+                music_id = db.add_music(
+                    title=clean_name,
+                    quality="320", 
+                    file_id=send_message.audio.id,
+                    file_size=file_size,
+                    source="soundcloud",
+                    source_url=url
+                )
+                
+                db.increase_download_count(clean_name, "320")
+                
+                try:
+                    db.add_user_music_history(user_id=user_id, music_id=music_id, title=clean_name, quality="320")
+                except Exception as e:
+                    print("DB_HISTORY_SAVE_ERROR:", repr(e))
+                    
+                if music_id:
+                    fingerprint_job = stage_fingerprint_job(music_id, file_path)
+
+            except Exception as e:
+                print(f"SC_DL Error: {e}")
+                await loading_msg.edit_text("❌ خطا در ارسال فایل صوتی.")
+                
+            finally:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    print(f"SC_TEMP_FILE DELETED: {file_path}")
+                
+                if fingerprint_job:
+                    submit_fingerprint_job(fingerprint_job)
+                    
+        else:
+            await loading_msg.edit_text("❌ متاسفانه دانلود فایل با خطا مواجه شد.")
+            
+    finally:
+        # Always release the user lock
+        if lock.locked():
+            lock.release()
+
