@@ -1,102 +1,130 @@
 import os
-import asyncio
-import yt_dlp
+import httpx
+import re
+from urllib.parse import quote
+from soundcloud.search import update_client_id
+import soundcloud.search as sc_search # ایمپورت کل ماژول برای دسترسی به متغیر آپدیت‌شده
 
-# Proxy port for local testing (when deploying to host, set to None: LOCAL_PROXY = None)
-LOCAL_PROXY = "http://127.0.0.1:10808"
-
-# Path where downloaded audio files are stored
+WORKER_URL = "https://sc.uplowder.ir/"
 DOWNLOAD_DIR = os.path.join(os.getcwd(), "temp")
 
-# Create directory if it does not exist
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
-def _sync_download(url: str) -> str | None:
-    """
-    Synchronous function responsible for the main download using yt-dlp
-    """
-    # Configuration options for yt-dlp
-    ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': os.path.join(DOWNLOAD_DIR, 'track_%(id)s.%(ext)s'),
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'quiet': True,
-            'no_warnings': True,
-            
-            # --- Prevent saving partial/incomplete files ---
-            'nopart': True,             
-            # ----------------------------------------------
-            
-            'socket_timeout': 60,       
-            'extractor_retries': 3,     
-        }
-
-    # Add proxy only if configured
-    if LOCAL_PROXY:
-        ydl_opts['proxy'] = LOCAL_PROXY
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Extract info and download file
-            info_dict = ydl.extract_info(url, download=True)
-            
-            # Locate the final saved file path
-            expected_filename = ydl.prepare_filename(info_dict)
-            
-            # Fix the file extension to mp3 since audio was converted
-            final_path = expected_filename.rsplit('.', 1)[0] + '.mp3'
-            
-            if os.path.exists(final_path):
-                return final_path
+# تابع کمکی برای گرفتن توکن معتبر
+async def get_valid_client_id(client_id: str):
+    if not client_id:
+        print("[SC API] Client ID is None! Attempting to force update...")
+        await update_client_id()
+        # خواندن مستقیم متغیر از ماژول برای جلوگیری از کش شدن مقدار قبلی
+        new_id = sc_search.CURRENT_CLIENT_ID
+        if not new_id:
+            print("[SC API] Fatal Error: Cannot fetch Client ID.")
             return None
-            
-    except Exception as e:
-        print(f"[SoundCloud Download] Error: {e}")
+        return new_id
+    return client_id
+
+async def get_sc_track_data(url: str, client_id: str):
+    valid_id = await get_valid_client_id(client_id)
+    if not valid_id:
         return None
 
-async def download_track(url: str) -> tuple[str | None, str | None]:
-    """
-    Asynchronously download file and extract track name from URL
-    Output: (file_path, clean_track_name)
-    """
-    print(f"[SoundCloud Download] Downloading: {url}")
+    resolve_url = f"https://api-v2.soundcloud.com/resolve?url={quote(url)}&client_id={valid_id}"
     
-    # 1. Safely download file in a separate background thread
-    file_path = await asyncio.to_thread(_sync_download, url)
+    headers = {
+        "Target-Url": resolve_url,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Origin": "https://soundcloud.com",
+        "Referer": "https://soundcloud.com/"
+    }
     
-    if file_path:
-        # 2. Extract name from URL
-        # Example: https://soundcloud.com/shahin-6/shahin-najafi-chiz
-        raw_slug = url.rstrip('/').split('/')[-1]          # Result: shahin-najafi-chiz
-        clean_name = raw_slug.replace('-', ' ')            # Result: shahin najafi chiz
-        
-        print(f"[SoundCloud Download] Success: {file_path}")
-        print(f"[SoundCloud Download] Extracted Name: {clean_name}")
-        
-        # Return file path and track name simultaneously as a tuple
-        return file_path, clean_name
-    else:
-        print("[SoundCloud Download] Failed.")
-        return None, None
-
-# Module test section
-if __name__ == "__main__":
-    async def test_module():
-        test_url = "https://soundcloud.com/shahin-6/shahin-najafi-chiz"
-        
-        print("در حال شروع دانلود...")
-        
-        # Receive file path and track name simultaneously
-        file_path, clean_name = await download_track(test_url)
-        
-        if file_path:
-            print("\n--- نتیجه نهایی ---")
-            print(f"مسیر فایل: {file_path}")
-            print(f"اسم نمایشی برای کاربر: {clean_name}")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            response = await client.get(WORKER_URL, headers=headers)
+            if response.status_code == 200:
+                data = response.json()
+                # ذخیره آیدی معتبر در دیکشنری برگشتی برای استفاده در مراحل بعد
+                data['_used_client_id'] = valid_id 
+                return data
+            else:
+                print(f"[SC API Error] Resolve failed: HTTP {response.status_code}")
+        except Exception as e:
+            print(f"[SC API Error] Exception in resolve: {e}")
             
-    asyncio.run(test_module())
+    return None
+
+async def get_sc_size_api(url: str, client_id: str):
+    track_data = await get_sc_track_data(url, client_id)
+    if track_data and "duration" in track_data:
+        duration_ms = track_data["duration"]
+        size_mb = (duration_ms / 1000) * 0.015625
+        return round(size_mb, 2)
+    return None
+
+async def download_track_api(url: str, client_id: str):
+    print(f"[SC Worker Download] Started for: {url}")
+    track_data = await get_sc_track_data(url, client_id)
+    
+    if not track_data:
+        print("[SC Worker Download] Error: No track data returned.")
+        return None, None
+        
+    valid_client_id = track_data.get('_used_client_id')
+        
+    raw_name = f"{track_data.get('user', {}).get('username', '')} {track_data.get('title', '')}"
+    clean_name = re.sub(r'[^\w\s]|_|\d', ' ', raw_name).strip()
+    clean_name = re.sub(r'\s+', ' ', clean_name)
+    
+    stream_url = None
+    track_auth = track_data.get("track_authorization") # برخی آهنگ‌ها نیاز به توکن اختصاصی دارند
+    
+    for trans in track_data.get("media", {}).get("transcodings", []):
+        if trans.get("format", {}).get("protocol") == "progressive":
+            stream_url = trans.get("url")
+            break
+            
+    if not stream_url:
+        print("[SC Worker Download] Error: Progressive stream not found!")
+        return None, None
+        
+    stream_url += f"?client_id={valid_client_id}"
+    if track_auth:
+        stream_url += f"&track_authorization={track_auth}"
+        
+    headers = {
+        "Target-Url": stream_url,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Origin": "https://soundcloud.com"
+    }
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            response = await client.get(WORKER_URL, headers=headers)
+            if response.status_code != 200:
+                print(f"[SC Worker Download] Error getting media URL: HTTP {response.status_code}")
+                return None, None
+            
+            data = response.json()
+            media_url = data.get("url")
+                
+            if not media_url:
+                print("[SC Worker Download] Error: Media URL is empty in response.")
+                return None, None
+                
+            dl_headers = {"Target-Url": media_url}
+            final_path = os.path.join(DOWNLOAD_DIR, f"track_{track_data['id']}.mp3")
+            
+            async with client.stream("GET", WORKER_URL, headers=dl_headers) as dl_resp:
+                if dl_resp.status_code == 200:
+                    with open(final_path, 'wb') as f:
+                        async for chunk in dl_resp.aiter_bytes(chunk_size=1024 * 1024):
+                            f.write(chunk)
+                    print(f"[SC Worker Download] Success: Downloaded successfully!")
+                    return final_path, clean_name
+                else:
+                     print(f"[SC Worker Download] Stream download error: HTTP {dl_resp.status_code}")
+                     
+        except Exception as e:
+            print(f"[SC Worker Download] Exception during download process: {e}")
+                
+    return None, None

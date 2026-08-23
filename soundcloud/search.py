@@ -3,8 +3,7 @@ import aiohttp
 from urllib.parse import quote
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-WORKER_URL = "https://melody-yar.eftgxc.workers.dev/"
-LOCAL_PROXY = "http://127.0.0.1:10808" 
+WORKER_URL = "https://sc.uplowder.ir/" # Updated Worker URL
 
 CURRENT_CLIENT_ID = None
 
@@ -14,7 +13,7 @@ async def update_client_id():
         async with aiohttp.ClientSession() as session:
             headers_main = {"Target-Url": "https://soundcloud.com"}
             
-            async with session.get(WORKER_URL, headers=headers_main, proxy=LOCAL_PROXY) as response:
+            async with session.get(WORKER_URL, headers=headers_main) as response:
                 if response.status != 200:
                     print("[SoundCloud] Error fetching main page.")
                     return
@@ -26,7 +25,7 @@ async def update_client_id():
                 if 'sndcdn.com' in script_url:
                     headers_js = {"Target-Url": script_url}
                     
-                    async with session.get(WORKER_URL, headers=headers_js, proxy=LOCAL_PROXY) as js_resp:
+                    async with session.get(WORKER_URL, headers=headers_js) as js_resp:
                         if js_resp.status == 200:
                             js_text = await js_resp.text()
                             match = re.search(r'client_id:"([a-zA-Z0-9]{32})"', js_text)
@@ -62,7 +61,7 @@ async def search_tracks(query: str, limit: int = 10) -> dict | None:
     try:
         async with aiohttp.ClientSession() as session:
             
-            async with session.get(WORKER_URL, headers=headers, proxy=LOCAL_PROXY) as response:
+            async with session.get(WORKER_URL, headers=headers) as response:
                 if response.status == 200:
                     data = await response.json()
                     

@@ -5,7 +5,7 @@ from balethon.objects import InlineKeyboard, InlineKeyboardButton
 import os
 import uuid
 from soundcloud.search import search_tracks
-from soundcloud.download import download_track
+from soundcloud.download import download_track_api # Changed here
 from db_cache_scrape import search_cache_db
 import asyncio
 import yt_dlp
@@ -503,10 +503,10 @@ async def handle_scsearch_callback(callback_query, bot):
             await loading_msg.edit_text("متاسفانه در جستجوی پیشرفته هم موردی پیدا نشد!")
             return
             
-        # Convert dictionary to a list of dicts because search_cache_db expects a list[cite: 12]
+        # Convert dictionary to a list of dicts because search_cache_db expects a list
         raw_results = [{"name": name, "url": url} for name, url in results_dict.items()]
         
-        # Save the newly scraped results into the database cache[cite: 12]
+        # Save the newly scraped results into the database cache
         saved = search_cache_db.save_results(sc_query, raw_results)
         print(f"SC_CACHE SAVE: {saved}")
         
@@ -563,31 +563,11 @@ async def handle_scpage_callback(callback_query, bot):
         await callback_query.message.reply("❌ خطا در نمایش صفحات ساندکلاد.")
 
 
+# --- Removed _get_sc_size_sync and get_sc_size ---
 
-def _get_sc_size_sync(url: str):
-    """Sync function to fetch SoundCloud track size without downloading"""
-    ydl_opts = {
-        'quiet': True, 
-        'no_warnings': True,
-        'proxy': "http://127.0.0.1:10808" # Keep proxy if running locally, otherwise None
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            # Try to get exact size or approximate size
-            size = info.get('filesize') or info.get('filesize_approx')
-            if size:
-                return round((size / (1024 * 1024)*2), 2)
-    except Exception as e:
-        print(f"Error fetching SC size: {e}")
-    return None
-
-
-
-async def get_sc_size(url: str):
-    """Async wrapper to prevent blocking the bot while fetching size"""
-    return await asyncio.to_thread(_get_sc_size_sync, url)
-
+# We need CURRENT_CLIENT_ID from search.py for the new API functions
+from soundcloud.search import CURRENT_CLIENT_ID
+from soundcloud.download import get_sc_size_api # Import the new size function
 
 async def handle_scdl_callback(callback_query, bot):
     """Step 1: Show quality button and file size when a track is clicked"""
@@ -605,8 +585,9 @@ async def handle_scdl_callback(callback_query, bot):
 
     await safe_answer_callback(callback_query, "در حال دریافت اطلاعات آهنگ...")
     
-    # Get remote size using yt-dlp without downloading
-    size_mb = await get_sc_size(url)
+    # Get remote size using the new API function
+    # Note: We pass CURRENT_CLIENT_ID
+    size_mb = await get_sc_size_api(url, CURRENT_CLIENT_ID)
     
     # --- NEW: Save the size in the cache so we can check it before downloading ---
     cache_data["size"] = size_mb
@@ -702,7 +683,7 @@ async def handle_scquality_callback(callback_query, bot):
         loading_msg = await callback_query.message.reply(f"⏳ در حال آماده سازی آهنگ *{clean_name}* ...")
         
         async with sc_download_semaphore:
-            file_path, _ = await download_track(url)
+            file_path, _ = await download_track_api(url, CURRENT_CLIENT_ID) # Changed here
             
         fingerprint_job = None
         
@@ -781,4 +762,3 @@ async def handle_scquality_callback(callback_query, bot):
         # Always release the user lock
         if lock.locked():
             lock.release()
-
