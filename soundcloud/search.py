@@ -75,37 +75,40 @@ async def search_tracks(query: str, limit: int = 10) -> dict | None:
                             
                             artist = track.get("user", {}).get("username", "")
                             title = track.get("title", "")
-                            
+
+                            # 1. Extract genre and clean it
+                            raw_genre = track.get("genre", "") or ""
+                            # Convert genre to a clean hashtag format (e.g., Hip-Hop to hiphop or pop to pop)
+                            clean_genre = re.sub(r'[^\w]', '', raw_genre).strip()
+
                             raw_name = f"{artist} {title}"
-                            
-                            # 1. Remove .mp3 extension
+
+                            # 2. Remove .mp3 extension
                             raw_name = re.sub(r'(?i)\.mp3', ' ', raw_name)
-                            
-                            # 2. This regex strips all punctuation, parentheses, emojis, hyphens, underscores (_), and all digits (Persian/English)
-                            # Leaving strictly pure letters and whitespaces
+
+                            # 3. Strip punctuation and digits
                             raw_name = re.sub(r'[^\w\s]|_|\d', ' ', raw_name)
-                            
+
                             # --- Smart extraction based on language ---
                             if is_farsi_query:
-                                # Since the text is stripped of symbols and digits, extract only Persian letters
                                 words = re.findall(r'[\u0600-\u06FF\u200C]+', raw_name)
                             else:
-                                # Only English letters
                                 words = re.findall(r'[a-zA-Z]+', raw_name)
                                 
                             clean_name = " ".join(words)
                             clean_name = re.sub(r'\s+', ' ', clean_name).strip()
-                            
-                            # Fallback guard: if name became empty (due to language mismatch)
+
                             if not clean_name:
-                                # Fall back to the raw name that previously had symbols and digits cleaned
                                 clean_name = re.sub(r'\s+', ' ', raw_name).strip()
-                            # ------------------------------------
-                            
+
                             url = track.get("permalink_url")
-                            
+
+                            # Save URL and genre alongside track name
                             if clean_name and url:
-                                results[clean_name] = url
+                                results[clean_name] = {
+                                    "url": url,
+                                    "genre": clean_genre
+                                }
                                 
                     return results
                 else:

@@ -492,10 +492,8 @@ async def handle_scsearch_callback(callback_query, bot):
     raw_results = search_cache_db.get_results(sc_query)
     
     if raw_results:
-        # Cache Hit: Results found in database
         print(f"SC_CACHE HIT ({len(raw_results)})")
     else:
-        # Cache Miss: Scrape SoundCloud
         print("SC_CACHE MISS -> SCRAPE SOUNDCLOUD")
         results_dict = await search_tracks(query)
         
@@ -503,28 +501,32 @@ async def handle_scsearch_callback(callback_query, bot):
             await loading_msg.edit_text("متاسفانه در جستجوی پیشرفته هم موردی پیدا نشد!")
             return
             
-        # Convert dictionary to a list of dicts because search_cache_db expects a list
-        raw_results = [{"name": name, "url": url} for name, url in results_dict.items()]
+        # Convert data structure for database cache storage
+        raw_results = [
+            {"name": name, "url": data["url"], "genre": data.get("genre", "")}
+            for name, data in results_dict.items()
+        ]
         
-        # Save the newly scraped results into the database cache
         saved = search_cache_db.save_results(sc_query, raw_results)
         print(f"SC_CACHE SAVE: {saved}")
         
-    # 2. Process results for pagination and 64-byte Telegram/Bale limits
     search_id = str(uuid.uuid4())[:8]
     results_list = []
-    
+
     for item in raw_results:
         clean_name = item["name"]
         url = item["url"]
+        genre = item.get("genre", "")
         
-        # Generate a short ID for the callback data
         short_id = str(uuid.uuid4())[:8]
         
-        # Store the real URL in RAM cache for the download phase
-        sc_links_cache[short_id] = {"url": url, "name": clean_name}
+        # Cache link and genre in RAM for the send phase
+        sc_links_cache[short_id] = {
+            "url": url, 
+            "name": clean_name,
+            "genre": genre
+        }
         
-        # Append to the list used for pagination buttons
         results_list.append({"name": clean_name, "short_id": short_id})
         
     # Store the entire processed list in RAM cache for page navigation
@@ -626,8 +628,12 @@ async def handle_scquality_callback(callback_query, bot):
         
     url = cache_data["url"]
     clean_name = cache_data["name"]
+    genre = cache_data.get("genre", "")
     size_mb = cache_data.get("size") # --- NEW: Retrieve size from cache ---
-
+        # Construct caption with genre hashtag
+    caption_text = "\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
+    if genre:
+        caption_text = caption_text + f"\n#{genre}"
     # ==============================================================
     # 1. User Lock (Spam Prevention)
     # ==============================================================
@@ -715,7 +721,7 @@ async def handle_scquality_callback(callback_query, bot):
                         chat_id,
                         audio=f,
                         title=clean_name,
-                        caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
+                        caption=caption_text
                     )
                 
                 await loading_msg.delete()

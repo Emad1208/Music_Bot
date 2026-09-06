@@ -41,7 +41,7 @@ from fprint.service import get_audio_file_id, identify_message_audio
 from fprint.queue import start_fingerprint_queue, stop_fingerprint_queue
 
 from .weekly_task import setup_scheduler
-from .bot_helpers import start_message, cleanup_search_cache
+from .bot_helpers import start_message, cleanup_search_cache, safe_answer_callback
 from .audio_downloader import close_download_client ,close_download_client_no_ssl
 from .bot_state import get_user_lock
 from .music_handlers import (
@@ -464,7 +464,7 @@ async def answer_callback_query(callback_query):
             await handler(callback_query)
             return
 
-    await callback_query.answer("unknown command")
+    await safe_answer_callback(callback_query("unknown command"))
 
 
 def bot_run():
