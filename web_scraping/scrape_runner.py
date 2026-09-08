@@ -322,19 +322,6 @@ async def show_cached_search_results(message, results, search_results_cache):
     )
 
 
-async def send_advanced_search_button(message, song_query):
-    """Helper function to send message and SoundCloud advanced search button"""
-    safe_query = song_query[:40] 
-    
-    keyboard = InlineKeyboard(
-        [("جستجوی پیشرفته 🔍", f"scsearch:{safe_query}")]
-    )
-    
-    await message.reply(
-        "اگر آهنگت رو پیدا نکردی، روی دکمه زیر بزن:", 
-        keyboard
-    )
-
 
 async def show_music_results(message, song, search_results_cache):
     mem("SHOW_START")
@@ -349,8 +336,6 @@ async def show_music_results(message, song, search_results_cache):
             cached_results,
             search_results_cache
         )
-        # Add SoundCloud button
-        await send_advanced_search_button(message, song)
         return
 
     print("SEARCH_CACHE MISS")
@@ -368,8 +353,6 @@ async def show_music_results(message, song, search_results_cache):
                 db_results,
                 search_results_cache
             )
-            # Add SoundCloud button
-            await send_advanced_search_button(message, song)
             return
 
         print(f"DB MISS ({len(db_results)}) -> SCRAPE")
@@ -384,7 +367,7 @@ async def show_music_results(message, song, search_results_cache):
             [("جستجوی پیشرفته 🔍", f"scsearch:{safe_query}")]
         )
         await message.reply(
-            "موردی پیدا نشد! اما می‌تونی جستجوی پیشرفته رو امتحان کنی:", 
+            "❌ جستجو در سایت‌های ایرانی نتیجه‌ای نداشت.\nمی‌تونی جستجوی پیشرفته رو امتحان کنی:", 
             keyboard
         )
         return
@@ -404,8 +387,7 @@ async def show_music_results(message, song, search_results_cache):
         search_results_cache
     )
 
-    # Add SoundCloud button at the end of scraping
-    await send_advanced_search_button(message, song)
+
 
     
 async def show_db_music_results(message, song, db_results, search_results_cache):

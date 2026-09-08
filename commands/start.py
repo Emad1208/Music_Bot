@@ -1,13 +1,17 @@
 from .ads import user_state
 
-
 async def change_start_state(callback_query, state, text, answer):
     user_id = callback_query.author.id
 
     user_state[user_id]["state"] = state
 
     await callback_query.message.edit(text)
-    await callback_query.answer(answer)
+    
+    # جلوگیری از کرش کردن برنامه هنگام تایم‌اوت شدن دکمه‌های شیشه‌ای
+    try:
+        await callback_query.answer(answer)
+    except Exception as e:
+        print(f"Start Callback Answer Ignored: {e}")
 
 
 async def start_waiting_for_name(callback_query):

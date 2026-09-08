@@ -53,13 +53,23 @@ from .music_handlers import (
     handle_scsearch_callback,    
     handle_scdl_callback,
     handle_scpage_callback,
-    handle_scquality_callback      
+    handle_scquality_callback,
+    handle_scrape_callback  
 )
 from .shutdown import (
     install_shutdown_signal_handlers,
     notify_active_admins_bot_stopped,
 )
-
+from .radiojavan_handler import (
+    init_radiojavan_session,
+    close_radiojavan_session,
+    cleanup_rj_cache,
+    handle_rj_menu_callback,
+    handle_rj_download_callback,
+    handle_rj_lyrics_callback,
+    handle_rj_album_callback,
+    handle_rj_page_callback 
+)
 
 token = config('BALE_BOT_TOKEN')
 
@@ -80,6 +90,8 @@ async def initialize_tasks():
     
     # Initialize the APScheduler (it will now successfully find the running event loop)
     setup_scheduler(bot)
+    await init_radiojavan_session()
+    asyncio.create_task(cleanup_rj_cache())
 
 
 @bot.on_shutdown()
@@ -373,6 +385,32 @@ async def answer_callback_query(callback_query):
     if not await ensure_required_channel_membership(callback_query):
         return
 
+    # Handle Radio Javan Callbackss
+    if data.startswith("rj:"):
+        await handle_rj_menu_callback(callback_query)
+        return
+        
+    if data.startswith("rjdl:"):
+        await handle_rj_download_callback(callback_query, bot)
+        return
+
+    if data.startswith("rjlyrics:"):
+        await handle_rj_lyrics_callback(callback_query)
+        return
+
+    if data.startswith("rjalbum:"):
+        await handle_rj_album_callback(callback_query, bot)
+        return
+
+    if data.startswith("rjpage:"):
+        await handle_rj_page_callback(callback_query)
+        return
+
+    # Handle Scrape Callbacks
+    if data.startswith("scrape:"):
+            await handle_scrape_callback(callback_query, bot)
+            return
+
     # Soundclaude Handlers
     if data.startswith("scsearch:"):
         await handle_scsearch_callback(callback_query, bot)
@@ -496,6 +534,7 @@ def bot_run():
         asyncio.run(close_client_behmelody())
         asyncio.run(close_client_musics_mehr())
         asyncio.run(close_download_client_no_ssl())
+        asyncio.run(close_radiojavan_session())
     
 
 

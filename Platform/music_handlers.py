@@ -10,7 +10,7 @@ from db_cache_scrape import search_cache_db
 import asyncio
 import yt_dlp
 from dictation.similar_remove_text import only_removing
-
+from .radiojavan_handler import process_rj_search
 from db_Project.db_init import db, word_db
 from spotify_service import (
     clean_spotify_search_query,
@@ -57,14 +57,64 @@ async def handle_song_name(message, bot):
     )
 
     await bot.send_chat_action(chat_id)
+    
+    # ==========================================
+    # 🥇 First Stage: Search (Primary Source - RJ)
+    # ==========================================
+    try:
+        rj_search_id, rj_buttons = await process_rj_search(song, user_id)
+        if rj_search_id and rj_buttons:
+            # If results exist, edit message with the specified prompt
+            await msg.edit("یکی از گزینه‌های زیر را انتخاب کنید:", InlineKeyboard(*rj_buttons))
+        else:
+            # Source name omitted from user-facing message
+            await msg.edit(f"❌ جستجو نتیجه‌ای نداشت.")
+    except Exception as e:
+        # Source name printed only to terminal logs
+        print(f"Radio Javan Network Error: {e}")
+        await msg.edit(f"❌ مشکل در برقراری ارتباط با سرور")
+        
+    # ==========================================
+    # 🥈 Fallback Buttons Message
+    # ==========================================
+    # This message is always sent so users have alternatives if not found in primary results
+    safe_query = song[:40]
+    keyboard = InlineKeyboard(
+        [("🌐 جستجو در سایت‌های ایرانی", f"scrape:{safe_query}")],
+        [("🔍 جستجوی پیشرفته", f"scsearch:{safe_query}")]
+    )
+    
+    await bot.send_message(
+        chat_id,
+        "اگر آهنگت رو پیدا نکردی، روی یکی از دکمه‌های زیر بزن:",
+        reply_markup=keyboard
+    )
+
+
+# ==========================================
+# Handler for "Search on Iranian Sites" Button
+# ==========================================
+async def handle_scrape_callback(callback_query, bot):
+    data = callback_query.data
+    _, song = data.split(":", 1)
+    user_id = callback_query.author.id
+    user_name = callback_query.author.username
+    user_firstname = callback_query.author.first_name
+    chat_id = callback_query.message.chat.id
+
+    await safe_answer_callback(callback_query, "شروع جستجو در سایت‌های ایرانی...")
+
+    msg = await callback_query.message.reply(f"🌐 در حال جستجو در سایت‌های ایرانی:\n*{song}*\n(ممکن است کمی طول بکشد)")
+
+    fake_msg = callback_query.message
+    fake_msg.author = callback_query.author
 
     try:
         await show_music_results(
-            message,
+            fake_msg,
             song,
             search_results_cache
         )
-
         try:
             await bot.delete_message(chat_id, msg.id)
         except Exception as e:
@@ -79,7 +129,6 @@ async def handle_song_name(message, bot):
             f"با نام: {user_firstname}\n"
             f"نام کاربری: {user_name}"
         )
-
     except httpx.RequestError as e:
         await msg.edit("خطای شبکه در هنگام دانلود")
         await bot.send_message(
@@ -89,7 +138,6 @@ async def handle_song_name(message, bot):
             f"با نام: {user_firstname}\n"
             f"نام کاربری: {user_name}"
         )
-
     except Exception as e:
         await msg.edit("خطای غیرمنتظره در ارسال فایل")
         await bot.send_message(
@@ -495,10 +543,17 @@ async def handle_scsearch_callback(callback_query, bot):
         print(f"SC_CACHE HIT ({len(raw_results)})")
     else:
         print("SC_CACHE MISS -> SCRAPE SOUNDCLOUD")
-        results_dict = await search_tracks(query)
-        
-        if not results_dict:
-            await loading_msg.edit_text("متاسفانه در جستجوی پیشرفته هم موردی پیدا نشد!")
+        try:
+            results_dict = await search_tracks(query)
+        except Exception as e:
+            print(f"SC_SEARCH ERROR: {e!r}")
+            results_dict = None  # در صورت قطعی اینترنت مقدار را None می‌گذاریم
+            
+        if results_dict is None:
+            await loading_msg.edit_text("❌ مشکل در برقراری ارتباط با سرور")
+            return
+        elif len(results_dict) == 0:
+            await loading_msg.edit_text("❌ جستجوی پیشرفته نتیجه‌ای نداشت")
             return
             
         # Convert data structure for database cache storage
