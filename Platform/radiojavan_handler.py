@@ -5,6 +5,8 @@ import re
 from balethon.objects import InlineKeyboard
 from utils.timer import timer
 from .ad_runtime import send_ad_before_music
+from db_Project.db_init import db
+from AI.gemini_genre import get_song_genre
 
 # Import global bot user lock to prevent concurrent downloads across different sources
 from .bot_state import get_user_lock
@@ -234,6 +236,7 @@ async def handle_rj_album_callback(callback_query, bot):
         
         if not tracks:
             await safe_callback_query(callback_query, "این آهنگ آلبومی ندارد یا سینگل است")
+            await callback_query.message.reply("این آهنگ آلبومی ندارد یا سینگل است")
             return
             
         album_name = info.get("album")
@@ -285,13 +288,42 @@ async def handle_rj_album_callback(callback_query, bot):
         await safe_callback_query(callback_query, "لیست آلبوم آماده شد")
         chat_id = callback_query.message.chat.id
         
+        # Check album cover presence in the database
+        artist_en = str(info.get("artist") or song.get("artist") or "").strip()
+        artist_fa = str(info.get("artist_farsi") or song.get("artist_farsi") or artist_en).strip()
+        album_id = db.get_or_create_album(album_name, artist_fa, year if year != "نامشخص" else None, photo_url)
+        
+        # 📈 Increment album popularity metrics (once after album entity verification)
+        if album_id:
+            db.increase_album_download_count(album_id)
+        
+        album_record = db.get_album(album_id) if album_id else None
+        cached_cover_id = album_record['cover_file_id'] if album_record else None
+        
         try:
-            if photo_path and photo_path.exists():
+            # 🥇 Scenario 1: Cover exists in database (instant dispatch)
+            if cached_cover_id:
+                await bot.send_photo(chat_id, photo=cached_cover_id, caption=caption, reply_markup=InlineKeyboard(*buttons))
+                
+            # 🥈 Scenario 2: Cover not in database; download and persist
+            elif photo_path and photo_path.exists():
                 with open(photo_path, "rb") as photo_file:
-                    await bot.send_photo(chat_id, photo=photo_file, caption=caption, reply_markup=InlineKeyboard(*buttons))
+                    sent_photo = await bot.send_photo(chat_id, photo=photo_file, caption=caption, reply_markup=InlineKeyboard(*buttons))
+                
+                # Safely extract uploaded photo file_id and persist to database
+                if album_id and hasattr(sent_photo, 'photo'):
+                    photo_obj = sent_photo.photo[-1] if isinstance(sent_photo.photo, list) else sent_photo.photo
+                    new_file_id = getattr(photo_obj, 'file_id', getattr(photo_obj, 'id', None))
+                    
+                    if new_file_id:
+                        db.update_album_cover_file_id(album_id, new_file_id)
+                        
                 photo_path.unlink(missing_ok=True)
+                
+            # 🥉 Scenario 3: No image available; send text only
             else:
                 await callback_query.message.reply(caption, reply_markup=InlineKeyboard(*buttons))
+                
         except Exception as e:
             print(f"PHOTO UPLOAD ERROR: {e!r}", flush=True)
             await callback_query.message.reply(caption, reply_markup=InlineKeyboard(*buttons))
@@ -303,91 +335,169 @@ async def handle_rj_album_callback(callback_query, bot):
         await safe_callback_query(callback_query, "خطا در دریافت آلبوم")
 
 # ==========================================
-# Internal function to download and send audio file
+# Internal function to download and send audio file (Updated with DB & AI)
 # ==========================================
 async def _send_selected_song(callback_query, song, search_id, index, quality, bot):
     path, url = None, None
-    name = label(song)
     chat_id = callback_query.message.chat.id
+    user_id = callback_query.author.id
 
-    # ✨ Send advertisement before delivering music
-    with timer("SEND_AD_RJ"):
-        await send_ad_before_music(bot, chat_id)
-
-    loading = await callback_query.message.reply(f"در حال دریافت *{name}* ...")
     try:
+        # 1. Fetch basic song information
         info = await radio_jn.details(song["id"])
         url = info.get("link")
+        
         if not url:
-            await edit(loading, "لینک دانلود پیدا نشد.")
+            await callback_query.message.reply("لینک دانلود پیدا نشد.")
             return
-            
+
         if quality != "default":
             url = re.sub(r'/mp3-\d+/', f'/mp3-{quality}/', url)
-            
-        # Apply download concurrency limit (maximum 3 concurrent downloads)
-        async with rj_download_semaphore:
-            path = await radio_jn.download(url, song["id"])
 
         # ==========================================
-        # ✨ Extract Album Title, Release Year, and Persian Track Name
+        # Extract metadata for both scenarios (cache hit and fresh download)
         # ==========================================
+        artist_en = str(info.get("artist") or song.get("artist") or "").strip()
+        title_en = str(info.get("song") or song.get("song") or "").strip()
+        name = f"{artist_en} - {title_en}" if artist_en and title_en else label(song)
+        
+        artist_fa = str(info.get("artist_farsi") or song.get("artist_farsi") or artist_en).strip()
+        title_fa = str(info.get("song_farsi") or song.get("song_farsi") or title_en).strip()
+        display_name = f"{artist_fa} - {title_fa}" if artist_fa and title_fa else name
+        
         album_info = info.get("album") or song.get("album")
+        rj_album_id = None
+        
         if isinstance(album_info, dict):
-            album = album_info.get("album", "نامشخص")
+            album = str(album_info.get("album", "نامشخص")).strip()
+            rj_album_id = album_info.get("id")  
         else:
             album = str(album_info or "نامشخص").strip()
-
-        year = info.get("date")
-        if not year and info.get("created_at"):
-            year = str(info.get("created_at")).split("-")[0]
-        if not year:
-            year = "نامشخص"
-
-        # Check and extract Persian name (if registered in Radio Javan database)
-        fa_song = info.get("song_farsi") or song.get("song_farsi")
-        fa_artist = info.get("artist_farsi") or song.get("artist_farsi")
-        
-        if fa_song and fa_artist:
-            display_name = f"{fa_artist} - {fa_song}"
-        elif fa_song:
-            display_name = fa_song
-        else:
-            display_name = name  # Fallback to English name if Persian name is unavailable
-
-        # ✨ Construct updated caption
-        caption = (
-            f"*آهنگ*: {display_name}\n"
-            f"*آلبوم*: «{album}»\n"
-            f"*سال انتشار*: {year}\n\n"
-            f"[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
-        )
-        # ==========================================
             
+        year = info.get("date") or str(info.get("created_at", "نامشخص")).split("-")[0]
+        lyric = str(info.get("lyric") or "").strip()
+
+        # Shared keyboard markup
         keyboard = InlineKeyboard(
             [("📝 متن ترانه", f"rjlyrics:{search_id}:{index}")],
             [("🌄 آلبوم آهنگ", f"rjalbum:{search_id}:{index}")]
         )
+
+        # ==========================================
+        # 2. Cache verification (deliver with enriched caption)
+        # ==========================================
+        cached_file_id = db.get_track_file_id(title=title_en, artist=artist_en, quality=quality)
         
+        if cached_file_id:
+            track_id = db.get_track_id(title_en, artist_en)
+            
+            # Retrieve genre from database (avoids AI query latency)
+            genre_db = db.get_track_genre(track_id) if track_id else "Persian Pop"
+            
+            if track_id:
+                db.increase_track_download_count(track_id)
+                db.add_user_music_history(user_id=user_id, title=name, quality=quality, track_id=track_id)
+                
+            with timer("SEND_AD_RJ"):
+                await send_ad_before_music(bot, chat_id)
+                
+            caption_cached = (
+                f"🎧 *آهنگ*: {display_name}\n"
+                f"💿 *آلبوم*: «{album}»\n"
+                f"📅 *سال*: {year}\n"
+                f"🎼 *سبک*: #{genre_db.replace(' ', '_')}\n\n"
+                f"[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
+            )
+                
+            await bot.send_audio(
+                chat_id, 
+                audio=cached_file_id, 
+                title=name,
+                caption=caption_cached,
+                reply_markup=keyboard
+            )
+            return
+
+        # ==========================================
+        # 3. Fresh download (if not present in cache)
+        # ==========================================
+        loading = await callback_query.message.reply(f"⏳ در حال دانلود *{name}* ...")
+        
+        with timer("SEND_AD_RJ"):
+            await send_ad_before_music(bot, chat_id)
+            
+        async with rj_download_semaphore:
+            path = await radio_jn.download(url, song["id"])
+
+        # ==========================================
+        # 4. Gemini inference for new track genre classification
+        # ==========================================
+        genre_ai = "Persian Pop"
         try:
+            ai_data = await get_song_genre(f"{title_en} {artist_en}")
+            if ai_data and 'genre' in ai_data:
+                genre_ai = ai_data['genre'].strip()
+        except Exception as e:
+            print(f"Gemini AI Genre Error: {e}")
+            
+        caption_new = (
+            f"🎧 *آهنگ*: {display_name}\n"
+            f"💿 *آلبوم*: «{album}»\n"
+            f"📅 *سال*: {year}\n"
+            f"🎼 *سبک*: #{genre_ai.replace(' ', '_')}\n\n"
+            f"[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
+        )
+
+        # ==========================================
+        # 5. Persist and Transmit
+        # ==========================================
+        try:
+            file_size = path.stat().st_size
             with path.open("rb") as audio:
-                await bot.send_audio(chat_id, audio=audio, title=name, caption=caption, reply_markup=keyboard)
-        except Exception as audio_error:
-            print(f"UPLOAD AUDIO FAILED, FALLBACK DOCUMENT: {audio_error!r}", flush=True)
-            with path.open("rb") as document:
-                await bot.send_document(chat_id, document, caption=caption, reply_markup=keyboard)
-        await loading.delete()
-    except ValueError as error:
-        if str(error) == "file_too_large" and url:
-            await edit(loading, "حجم فایل بیشتر از محدودیت بله است.")
-        else:
-            print(f"DOWNLOAD VALUE ERROR: {error!r}", flush=True)
-            await edit(loading, "اطلاعات فایل قابل قبول نیست.")
-    except Exception as error:
-        print(f"DOWNLOAD/UPLOAD ERROR: {error!r}", flush=True)
-        await edit(loading, "دانلود یا ارسال آهنگ با خطا مواجه شد.")
+                sent_msg = await bot.send_audio(chat_id, audio=audio, title=name, caption=caption_new, reply_markup=keyboard)
+            
+            # Safely retrieve file ID in Balethon
+            safe_file_id = getattr(sent_msg.audio, 'file_id', getattr(sent_msg.audio, 'id', None))
+            
+            # 💿 Verify and persist album (if track is not a standalone single)
+            cover_url = info.get("photo") or song.get("photo")
+            album_id = db.get_or_create_album(
+                title=album, 
+                artist=artist_fa, 
+                release_year=year if year != "نامشخص" else None, 
+                cover_url=cover_url
+                )
+
+            # Persist with clean Radio Javan metadata + AI-detected genre + album relation
+            track_id = db.save_full_track(
+                title_fa=title_fa,
+                artist_fa=artist_fa,
+                quality=quality,
+                file_id=safe_file_id,
+                file_size=file_size,
+                source="radio_javan",
+                source_url=url,
+                title_en=title_en,
+                artist_en=artist_en,
+                genre=genre_ai,
+                lyrics=lyric if lyric else None,
+                year=year if year != "نامشخص" else None, 
+                rj_id=str(song["id"]),
+                album_id=album_id             # <--- Smart relation to albums table
+            )
+            
+            # Record entry in user history
+            if track_id:
+                db.add_user_music_history(user_id=user_id, title=name, quality=quality, track_id=track_id)
+            
+            await loading.delete()
+            
+        except ValueError as error:
+            if str(error) == "file_too_large" and url:
+                await edit(loading, "حجم فایل بیشتر از محدودیت بله است.")
+        except Exception as error:
+            print(f"UPLOAD ERROR: {error!r}", flush=True)
+            await edit(loading, "ارسال آهنگ با خطا مواجه شد.")
     finally:
         if path is not None:
             path.unlink(missing_ok=True)
-
-

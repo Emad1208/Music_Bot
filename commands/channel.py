@@ -103,11 +103,15 @@ async def ensure_required_channel_membership(event):
 
     text, keyboard = _membership_prompt(missing_channels)
 
-    if hasattr(event, "data"):
-        await safe_answer(event, "ابتدا در کانال‌ها عضو شوید")
-        await event.message.reply(text, keyboard)
-    else:
-        await event.reply(text, keyboard)
+    try:
+        if hasattr(event, "data"):
+            await safe_answer(event, "ابتدا در کانال‌ها عضو شوید")
+            await event.message.reply(text, keyboard)
+        else:
+            await event.reply(text, keyboard)
+    except Exception as e:
+        print(f"Failed to send membership prompt: {e}")
+        # Prevent application crashes on network disconnects
 
     return False
 

@@ -44,18 +44,75 @@ class Database:
                 "ALTER TABLE users ADD COLUMN last_activity DATETIME"
             )
 
+        # ==========================================
+        # 1. Albums Table
+        # ==========================================
         self.cur.execute("""
-        CREATE TABLE IF NOT EXISTS musics (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        quality TEXT NOT NULL,
-        file_id TEXT,
-        file_size INTEGER,
-        download_count INTEGER DEFAULT 0,
-        source TEXT,
-        source_url TEXT,
-        UNIQUE(title, quality)
-                        )
+        CREATE TABLE IF NOT EXISTS albums (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            artist TEXT,
+            release_year INTEGER,
+            cover_url TEXT,
+            cover_file_id TEXT,
+            total_downloads INTEGER DEFAULT 0,
+            total_dl_tracks INTEGER DEFAULT 0
+        )
+        """)
+
+        # ==========================================
+        # 2. Tracks Identity Table
+        # ==========================================
+        self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS tracks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            album_id INTEGER,
+            title_fa TEXT,
+            title_en TEXT,
+            artist_fa TEXT,
+            artist_en TEXT,
+            year INTEGER,
+            lyrics TEXT,
+            cover_url TEXT,
+            spotify_id TEXT UNIQUE,
+            rj_id TEXT UNIQUE,
+            total_downloads INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            
+            FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE SET NULL
+        )
+        """)
+
+        # ==========================================
+        # 3. Track Files Table
+        # ==========================================
+        self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS track_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            track_id INTEGER NOT NULL,
+            quality TEXT NOT NULL,
+            file_id TEXT,
+            file_size INTEGER,
+            source TEXT,
+            source_url TEXT,
+            
+            UNIQUE(track_id, quality),
+            FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+        )
+        """)
+
+        # ==========================================
+        # 4. Genres Table for AI
+        # ==========================================
+        self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS track_genres (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            track_id INTEGER NOT NULL,
+            genre TEXT NOT NULL,
+            
+            UNIQUE(track_id, genre),
+            FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+        )
         """)
 
         self.cur.execute("""
@@ -68,7 +125,7 @@ class Database:
             downloaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
             FOREIGN KEY (music_id)
-                REFERENCES musics(id)
+                REFERENCES tracks(id)
                 ON DELETE SET NULL
         )
         """)
@@ -188,7 +245,7 @@ class Database:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
                 FOREIGN KEY (music_id)
-                    REFERENCES musics(id)
+                    REFERENCES tracks(id)
                     ON DELETE CASCADE,
 
                 UNIQUE(music_id, engine)
@@ -608,215 +665,219 @@ class Database:
 # ---------------------
 # Music Funcs
 # ---------------------
-    def get_music_file_id(self, title, quality):
+    def save_full_track(self, title_fa, artist_fa, quality, file_id, file_size, source, source_url, title_en=None, artist_en=None, genre=None, lyrics=None, album_id=None, year=None, rj_id=None):
+        """Persist track entity, file details, and genre in the unified database schema"""
+        title_fa = (title_fa or "").strip()
+        artist_fa = (artist_fa or "").strip()
+        
+        # 1. Verify track identity
         self.cur.execute("""
-            SELECT file_id
-            FROM musics
-            WHERE title = ?
-            AND quality = ?
-        """, (title, quality))
+            SELECT id FROM tracks WHERE title_fa = ? AND artist_fa = ?
+        """, (title_fa, artist_fa))
+        row = self.cur.fetchone()
+        
+        if row:
+            track_id = row['id']
+            # آپدیت فیلدهای خالی اگر در درخواست جدید ارسال شده باشند
+            if lyrics:
+                self.cur.execute("UPDATE tracks SET lyrics = ? WHERE id = ?", (lyrics, track_id))
+            if year:
+                self.cur.execute("UPDATE tracks SET year = ? WHERE id = ? AND year IS NULL", (year, track_id))
+            if rj_id:
+                self.cur.execute("UPDATE tracks SET rj_id = ? WHERE id = ? AND rj_id IS NULL", (rj_id, track_id))
+        else:
+            # Save all fields when creating a new track
+            self.cur.execute("""
+                INSERT INTO tracks (title_fa, title_en, artist_fa, artist_en, lyrics, album_id, year, rj_id, total_downloads)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            """, (title_fa, title_en, artist_fa, artist_en, lyrics, album_id, year, rj_id))
+            track_id = self.cur.lastrowid
+            # On initial track download, increment the parent album's download count as well
+            if album_id:
+                self.cur.execute("UPDATE albums SET total_dl_tracks = total_dl_tracks + 1 WHERE id = ?", (album_id,))
+            
+        # 2. Persist track audio file
+        if file_id:
+            self.cur.execute("""
+                INSERT INTO track_files (track_id, quality, file_id, file_size, source, source_url)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(track_id, quality) DO UPDATE SET 
+                    file_id = excluded.file_id,
+                    file_size = excluded.file_size
+            """, (track_id, quality, file_id, file_size, source, source_url))
+            
+        # 3. Persist genre
+        if genre:
+            self.cur.execute("""
+                INSERT OR IGNORE INTO track_genres (track_id, genre)
+                VALUES (?, ?)
+            """, (track_id, genre))
+            
+        self.con.commit()
+        return track_id
 
+    def get_track_file_id(self, title, artist, quality):
+        """Quickly retrieve platform file_id via smart bilingual table joins"""
+        self.cur.execute("""
+            SELECT tf.file_id 
+            FROM track_files tf
+            JOIN tracks t ON tf.track_id = t.id
+            WHERE (t.title_fa = ? OR t.title_en = ?) 
+              AND (t.artist_fa = ? OR t.artist_en = ?) 
+              AND tf.quality = ?
+        """, (title, title, artist, artist, quality))
+        
         result = self.cur.fetchone()
+        return result['file_id'] if result else None
 
-        if result:
-            return result[0]
-
-        return None
-
-
-    def add_music(self, title, quality, file_id, file_size, source, source_url):
+    def increase_track_download_count(self, track_id):
+        """Increment track download count + increment album cumulative track downloads"""
+        # 1. Update track download metrics
         self.cur.execute("""
-            INSERT OR IGNORE INTO musics
-            (title, quality, file_id, file_size, source, source_url)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            title,
-            quality,
-            file_id,
-            file_size,
-            source,
-            source_url
-        ))
-
+            UPDATE tracks SET total_downloads = total_downloads + 1 WHERE id = ?
+        """, (track_id,))
+        
+        # 2. Update album cumulative track downloads (total_dl_tracks)
+        self.cur.execute("""
+            UPDATE albums 
+            SET total_dl_tracks = total_dl_tracks + 1 
+            WHERE id = (SELECT album_id FROM tracks WHERE id = ?)
+        """, (track_id,))
+        
         self.con.commit()
 
+    def increase_album_download_count(self, album_id):
+        """Increment click count for album request button only"""
         self.cur.execute("""
-            SELECT id
-            FROM musics
-            WHERE title = ?
-            AND quality = ?
-        """, (title, quality))
-
-        row = self.cur.fetchone()
-        return row[0] if row else None
-
-
-    def get_all__music_titles(self):
-        self.cur.execute("""
-        SELECT title FROM musics
-            """)
-        return [row[0] for row in self.cur.fetchall()]
-
-
-    def increase_download_count(self, title, quality):
-
-        self.cur.execute("""
-            UPDATE musics
-            SET download_count = download_count + 1
-            WHERE title = ?
-            AND quality = ?
-        """, (
-            title,
-            quality
-        ))
-
+            UPDATE albums SET total_downloads = total_downloads + 1 WHERE id = ?
+        """, (album_id,))
         self.con.commit()
 
-
-    def get_music_id(self, title, quality):
+    def get_track_id(self, title, artist):
         self.cur.execute("""
-            SELECT id
-            FROM musics
-            WHERE title = ?
-            AND quality = ?
-        """, (title, quality))
-
+            SELECT id FROM tracks 
+            WHERE (title_fa = ? OR title_en = ?) 
+              AND (artist_fa = ? OR artist_en = ?)
+        """, (title, title, artist, artist))
         row = self.cur.fetchone()
-        return row[0] if row else None
+        return row['id'] if row else None
 
-
-    def add_user_music_history(
-            self,
-            user_id,
-            title,
-            quality=None,
-            music_id=None
-                    ):
+    def add_user_music_history(self, user_id, title, quality=None, track_id=None):
         title = (title or "").strip()
-        if not title:
-            return None
-
-        if music_id is None and quality is not None:
-            music_id = self.get_music_id(title, quality)
+        if not title: return None
 
         try:
             self.cur.execute("""
-                INSERT INTO user_music_history
-                (user_id, music_id, title, quality)
+                INSERT INTO user_music_history (user_id, music_id, title, quality)
                 VALUES (?, ?, ?, ?)
-            """, (
-                user_id,
-                music_id,
-                title,
-                quality
-            ))
+            """, (user_id, track_id, title, quality))
             history_id = self.cur.lastrowid
 
-            self.cur.execute("""
-                UPDATE users
-                SET last_activity = CURRENT_TIMESTAMP
-                WHERE user_id = ?
-            """, (user_id,))
-
+            self.cur.execute("UPDATE users SET last_activity = CURRENT_TIMESTAMP WHERE user_id = ?", (user_id,))
             self.con.commit()
             return history_id
-
         except Exception:
             self.con.rollback()
             raise
 
-
     def get_recent_user_music_history(self, user_id, limit=5):
         self.cur.execute("""
-            SELECT
-                id,
-                user_id,
-                music_id,
-                title,
-                quality,
-                downloaded_at
+            SELECT id, user_id, music_id as track_id, title, quality, downloaded_at
             FROM user_music_history
             WHERE user_id = ?
-            ORDER BY downloaded_at DESC, id DESC
-            LIMIT ?
+            ORDER BY downloaded_at DESC, id DESC LIMIT ?
         """, (user_id, limit))
-
         return self.cur.fetchall()
 
-
     def get_musics_count(self):
-        query = """
-        SELECT COUNT(*)
-        FROM musics
-        """
-
-        self.cur.execute(query)
-
+        self.cur.execute("SELECT COUNT(*) FROM tracks")
         return self.cur.fetchone()[0]
 
     def get_sended_musics_count(self):
-        self.cur.execute("""
-            SELECT COALESCE(SUM(download_count), 0)
-            FROM musics
-        """)
-
+        self.cur.execute("SELECT COALESCE(SUM(total_downloads), 0) FROM tracks")
         return self.cur.fetchone()[0]
 
-    def search_musics_grouped_by_title(self, query, limit=10):
-        like_query = f"%{query}%"
-
-        self.cur.execute("""
-            SELECT title, quality, file_id, file_size, source, source_url
-            FROM musics
-            WHERE title LIKE ?
-            AND file_id IS NOT NULL
-            ORDER BY download_count DESC
-        """, (like_query,))
-
-        rows = self.cur.fetchall()
-
-        grouped = {}
-
-        for title, quality, file_id, file_size, source, source_url in rows:
-            if title not in grouped:
-                grouped[title] = {
-                    "title": title,
-                    "source": source,
-                    "qualities": {}
-                }
-
-            grouped[title]["qualities"][quality] = {
-                "file_id": file_id,
-                "size": round(file_size / (1024 * 1024), 2) if file_size else None,
-                "url": source_url,
-            }
-
-        return list(grouped.values())[:limit]
-    
-
     def get_weekly_top_musics(self, limit=10):
-        """دریافت لیست پردانلودترین آهنگ‌ها در ۷ روز گذشته"""
-        query = """
+        self.cur.execute("""
             SELECT title, COUNT(*) as weekly_downloads
             FROM user_music_history
             WHERE downloaded_at >= datetime('now', '-7 days')
-            GROUP BY title
-            ORDER BY weekly_downloads DESC
-            LIMIT ?
-        """
-        self.cur.execute(query, (limit,))
+            GROUP BY title ORDER BY weekly_downloads DESC LIMIT ?
+        """, (limit,))
         return self.cur.fetchall()
-    
 
     def cleanup_old_history(self, days=30):
-        """حذف تاریخچه دانلودهای قدیمی‌تر از تعداد روز مشخص شده"""
-        query = """
-            DELETE FROM user_music_history 
-            WHERE downloaded_at <= datetime('now', ?)
-        """
-        self.cur.execute(query, (f'-{days} days',))
+        self.cur.execute("DELETE FROM user_music_history WHERE downloaded_at <= datetime('now', ?)", (f'-{days} days',))
         self.con.commit()
-        return self.cur.rowcount
+        return self.cur.rowcount    
+
+    def search_musics_grouped_by_title(self, query, limit=10):
+        """Perform local database search to avoid re-scraping (compatible with new schema)"""
+        like_query = f"%{query}%"
+        self.cur.execute("""
+            SELECT t.title_fa, t.artist_fa, tf.quality, tf.file_id, tf.file_size, tf.source, tf.source_url
+            FROM tracks t
+            JOIN track_files tf ON t.id = tf.track_id
+            WHERE (t.title_fa LIKE ? OR t.title_en LIKE ? OR t.artist_fa LIKE ? OR t.artist_en LIKE ?)
+            AND tf.file_id IS NOT NULL
+            ORDER BY t.total_downloads DESC
+        """, (like_query, like_query, like_query, like_query))
+        
+        rows = self.cur.fetchall()
+        grouped = {}
+        
+        for row in rows:
+            # Combine artist and track title for button display
+            display_title = f"{row['artist_fa']} - {row['title_fa']}" if row['artist_fa'] else row['title_fa']
+            
+            if display_title not in grouped:
+                grouped[display_title] = {
+                    "title": display_title,
+                    "source": row['source'],
+                    "qualities": {}
+                }
+                
+            grouped[display_title]["qualities"][row['quality']] = {
+                "file_id": row['file_id'],
+                "size": round(row['file_size'] / (1024 * 1024), 2) if row['file_size'] else None,
+                "url": row['source_url'],
+            }
+            
+        return list(grouped.values())[:limit]
+
+    def get_track_genre(self, track_id):
+        self.cur.execute("SELECT genre FROM track_genres WHERE track_id = ?", (track_id,))
+        row = self.cur.fetchone()
+        return row['genre'] if row else "Persian Pop"
+
+    def get_or_create_album(self, title, artist, release_year=None, cover_url=None):
+        """Register a new album or retrieve the ID of an existing one"""
+        if not title or title == "نامشخص":
+            return None
+            
+        self.cur.execute("SELECT id FROM albums WHERE title = ? AND artist = ?", (title, artist))
+        row = self.cur.fetchone()
+        
+        if row:
+            return row['id']
+            
+        self.cur.execute("""
+            INSERT INTO albums (title, artist, release_year, cover_url)
+            VALUES (?, ?, ?, ?)
+        """, (title, artist, release_year, cover_url))
+        self.con.commit()
+        return self.cur.lastrowid
+
+    def get_album(self, album_id):
+        self.cur.execute("SELECT * FROM albums WHERE id = ?", (album_id,))
+        return self.cur.fetchone()
+
+    def update_album_cover_file_id(self, album_id, file_id):
+        self.cur.execute("UPDATE albums SET cover_file_id = ? WHERE id = ?", (file_id, album_id))
+        self.con.commit()
+
+
+
 # ---------------------
 # Ads Funcs
 # ---------------------      
@@ -1134,29 +1195,15 @@ class Database:
 # ---------------------
 # FingerPrint Funcs
 # ---------------------  
-    def save_music_fingerprint(
-        self,
-        music_id: int,
-        track_key: str,
-        engine: str = "audfprint",
-        engine_version: str | None = None,
-    ):
+    def save_music_fingerprint(self, track_id: int, track_key: str, engine: str = "audfprint", engine_version: str | None = None):
         try:
             self.cur.execute("""
-            INSERT INTO music_fingerprints (
-                music_id,
-                engine,
-                engine_version,
-                track_key
-            )
+            INSERT INTO music_fingerprints (music_id, engine, engine_version, track_key)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(music_id, engine) DO UPDATE SET
                 track_key = excluded.track_key,
-                engine_version = COALESCE(
-                    excluded.engine_version,
-                    music_fingerprints.engine_version
-                )
-            """, (music_id, engine, engine_version, track_key))
+                engine_version = COALESCE(excluded.engine_version, music_fingerprints.engine_version)
+            """, (track_id, engine, engine_version, track_key))
             self.con.commit()
         except Exception:
             self.con.rollback()
@@ -1164,37 +1211,20 @@ class Database:
 
     def get_music_by_track_key(self, track_key: str):
         self.cur.execute("""
-        SELECT m.*
-        FROM musics m
-        JOIN music_fingerprints f
-            ON f.music_id = m.id
+        SELECT t.* 
+        FROM tracks t
+        JOIN music_fingerprints f ON f.music_id = t.id
         WHERE f.track_key = ?
         """, (track_key,))
-
         return self.cur.fetchone()
 
-
-    def has_music_fingerprint(self, music_id: int, engine: str = "audfprint"):
-        self.cur.execute("""
-        SELECT 1
-        FROM music_fingerprints
-        WHERE music_id = ?
-        AND engine = ?
-        """, (music_id, engine))
-
+    def has_music_fingerprint(self, track_id: int, engine: str = "audfprint"):
+        self.cur.execute("SELECT 1 FROM music_fingerprints WHERE music_id = ? AND engine = ?", (track_id, engine))
         return self.cur.fetchone() is not None
     
-
     def get_fingerprinted_musics_count(self):
-        query = """
-        SELECT COUNT(DISTINCT music_id)
-        FROM music_fingerprints
-        """
-
-        self.cur.execute(query)
-
+        self.cur.execute("SELECT COUNT(DISTINCT music_id) FROM music_fingerprints")
         return self.cur.fetchone()[0]
-
 
 # ---------------------
 # Closing DB

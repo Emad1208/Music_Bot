@@ -20,6 +20,8 @@ from spotify_service import (
 
 from utils.timer import timer
 
+from AI.gemini_genre import get_song_genre
+
 from commands.ads import user_state
 from .bot_state import search_results_cache, get_user_lock, CACHE_TTL
 from web_scraping.scrape_runner import (
@@ -346,8 +348,13 @@ async def handle_quality_callback(callback_query, bot):
                 f"⏳ در حال آماده‌سازی آهنگ با کیفیت {quality}..."
             )
 
+            # Split track title and artist for Iranian websites
+            parts = song_name.split(" - ", 1)
+            artist_fa = parts[0].strip() if len(parts) == 2 else ""
+            title_fa = parts[1].strip() if len(parts) == 2 else song_name
+
             with timer("DB_GET_FILE_ID"):
-                file_id = db.get_music_file_id(song_name, quality)
+                file_id = db.get_track_file_id(title=title_fa, artist=artist_fa, quality=quality)
 
             if file_id:
                 await send_cached_music(
@@ -719,23 +726,26 @@ async def handle_scquality_callback(callback_query, bot):
 
         await safe_answer_callback(callback_query, "در حال بررسی اطلاعات آهنگ...")
 
+      # Extract track name and artist (SoundCloud provides them combined)
+        parts = clean_name.split(" - ", 1)
+        artist = parts[0].strip() if len(parts) == 2 else ""
+        title = parts[1].strip() if len(parts) == 2 else clean_name
+
         # --- Check DB for Cache Hit ---
         with timer("DB_GET_FILE_ID_SC"):
-            file_id = db.get_music_file_id(clean_name, "320")
+            file_id = db.get_track_file_id(title=title, artist=artist, quality="320")
 
         if file_id:
             print(f"SC_DB HIT: Sending cached file for {clean_name}")
+            track_id = db.get_track_id(title, artist)
+            if track_id:
+                db.increase_track_download_count(track_id)
+                db.add_user_music_history(user_id=user_id, title=clean_name, quality="320", track_id=track_id)
+
             with timer("SEND_AD_SC"):
                 await send_ad_before_music(bot, chat_id)
 
-            await send_cached_music(
-                bot=bot,
-                chat_id=chat_id,
-                file_id=file_id,
-                song_name=clean_name,
-                quality="320",
-                user_id=user_id
-            )
+            await bot.send_audio(chat_id, audio=file_id, title=clean_name, caption=caption_text)
             return  
 
         # ==============================================================
@@ -744,65 +754,71 @@ async def handle_scquality_callback(callback_query, bot):
         loading_msg = await callback_query.message.reply(f"⏳ در حال آماده سازی آهنگ *{clean_name}* ...")
         
         async with sc_download_semaphore:
-            file_path, _ = await download_track_api(url, CURRENT_CLIENT_ID) # Changed here
+            file_path, _ = await download_track_api(url, CURRENT_CLIENT_ID)
             
         fingerprint_job = None
         
         if file_path and os.path.exists(file_path):
             try:
-                # Fallback: Check local file size after download just in case the estimation was wrong
                 local_size_mb = round(os.path.getsize(file_path) / (1024 * 1024), 2)
                 
                 if local_size_mb > 20:
                     await loading_msg.delete()
-                    button_text = f"{local_size_mb} MB 🔗 دانلود مستقیم آهنگ"
-                    await bot.send_message(
-                        chat_id,
-                        f"❌ حجم فایل بیشتر از محدودیت بله است.\n\n"
-                        f"🎵 {clean_name}\n\n"
-                        f"برای دانلود مستقیم روی دکمه زیر بزن:",
-                        InlineKeyboard([
-                            InlineKeyboardButton(button_text, url=url)
-                        ])
-                    )
+                    await bot.send_message(chat_id, f"❌ حجم فایل زیاد است. دانلود مستقیم: {url}")
                     return 
                 
                 with timer("SEND_AD_SC"):
                     await send_ad_before_music(bot, chat_id)
 
-                # Send file in Bale
+            # Send file in Bale
                 with open(file_path, "rb") as f:
-                    send_message = await bot.send_audio(
-                        chat_id,
-                        audio=f,
-                        title=clean_name,
-                        caption=caption_text
-                    )
+                    send_message = await bot.send_audio(chat_id, audio=f, title=clean_name, caption=caption_text)
                 
                 await loading_msg.delete()
                 
-                # Save into database
-                word_db.add_confirmed_music_text(clean_name, source="soundcloud")
-                
-                file_size = os.path.getsize(file_path)
-                music_id = db.add_music(
-                    title=clean_name,
-                    quality="320", 
-                    file_id=send_message.audio.id,
-                    file_size=file_size,
-                    source="soundcloud",
-                    source_url=url
-                )
-                
-                db.increase_download_count(clean_name, "320")
+                # ==========================================
+                # 🧠 AI: 5-dimensional metadata extraction for SoundCloud
+                # ==========================================
+                ai_title_fa = title
+                ai_title_en = title
+                ai_artist_fa = artist or ""
+                ai_artist_en = artist or ""
+                genre_ai = genre or "Persian Pop"
                 
                 try:
-                    db.add_user_music_history(user_id=user_id, music_id=music_id, title=clean_name, quality="320")
+                    ai_data = await get_song_genre(clean_name)
+                    if ai_data:
+                        ai_title_fa = str(ai_data.get('title_fa') or title).strip()
+                        ai_title_en = str(ai_data.get('title_en') or title).strip()
+                        ai_artist_fa = str(ai_data.get('artist_fa') or artist).strip()
+                        ai_artist_en = str(ai_data.get('artist_en') or artist).strip()
+                        genre_ai = str(ai_data.get('genre') or 'Persian Pop').strip()
                 except Exception as e:
-                    print("DB_HISTORY_SAVE_ERROR:", repr(e))
+                    print(f"Gemini AI Extraction Error (SoundCloud): {e}")
+
+                file_size = os.path.getsize(file_path)
+                
+                # ==========================================
+                # 💾 Unified persistence into the new schema (with 5 fields)
+                # ==========================================
+                track_id = db.save_full_track(
+                    title_fa=ai_title_fa,
+                    artist_fa=ai_artist_fa,
+                    quality="320", 
+                    file_id=send_message.audio.file_id,
+                    file_size=file_size,
+                    source="soundcloud",
+                    source_url=url,
+                    title_en=ai_title_en,
+                    artist_en=ai_artist_en,
+                    genre=genre_ai
+                )
+                
+                word_db.add_confirmed_music_text(clean_name, source="soundcloud")
+                db.add_user_music_history(user_id=user_id, music_id=None, title=clean_name, quality="320", track_id=track_id)
                     
-                if music_id:
-                    fingerprint_job = stage_fingerprint_job(music_id, file_path)
+                if track_id:
+                    fingerprint_job = stage_fingerprint_job(track_id, file_path)
 
             except Exception as e:
                 print(f"SC_DL Error: {e}")
@@ -811,15 +827,11 @@ async def handle_scquality_callback(callback_query, bot):
             finally:
                 if os.path.exists(file_path):
                     os.remove(file_path)
-                    print(f"SC_TEMP_FILE DELETED: {file_path}")
-                
                 if fingerprint_job:
                     submit_fingerprint_job(fingerprint_job)
-                    
         else:
             await loading_msg.edit_text("❌ متاسفانه دانلود فایل با خطا مواجه شد.")
-            
     finally:
-        # Always release the user lock
         if lock.locked():
             lock.release()
+

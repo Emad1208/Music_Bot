@@ -3,6 +3,7 @@ import uuid
 import httpx
 from balethon.objects import InlineKeyboardButton, InlineKeyboard
 import asyncio
+from AI.gemini_genre import get_song_genre
 from db_Project.db_init import db, word_db
 from fprint.queue import stage_fingerprint_job
 from utils.timer import timer
@@ -352,55 +353,65 @@ async def send_music(
         print(f"UPLOAD_SPEED: {upload_speed:.2f} MB/s")
 
         # =========================
-        # save music + source stats
+        # AI Parser + Save music + Source stats
         # =========================
         with timer("DB_SAVE_FILE_ID"):
             if send_message is None:
-                print("SEND_MESSAGE_IS_NONE")
                 return
-            file_id = send_message.audio.id
-            print("DB_WORD_SAVE_START")
-            word_db.add_confirmed_music_text(title, source=source)
-            print("DB_WORD_SAVE_DONE!")
+            
+            file_id = getattr(send_message.audio, 'file_id', getattr(send_message.audio, 'id', None))
+            
+            word_db.add_confirmed_music_text(final_title, source=source)
 
-            music_id = db.add_music(
-                title=final_title,
+            # 🧠 AI: 5-dimensional metadata extraction (Persian, English, and genre)
+            ai_title_fa = title
+            ai_title_en = title
+            ai_artist_fa = artist or ""
+            ai_artist_en = artist or ""
+            genre_ai = "Persian Pop"
+            
+            try:
+                ai_data = await get_song_genre(final_title)
+                if ai_data:
+                    ai_title_fa = str(ai_data.get('title_fa') or title).strip()
+                    ai_title_en = str(ai_data.get('title_en') or title).strip()
+                    ai_artist_fa = str(ai_data.get('artist_fa') or artist).strip()
+                    ai_artist_en = str(ai_data.get('artist_en') or artist).strip()
+                    genre_ai = str(ai_data.get('genre') or 'Persian Pop').strip()
+            except Exception as e:
+                print(f"Gemini AI Extraction Error: {e}")
+                # Fallback in case of network interruption
+                if not artist and " - " in title:
+                    parts = title.split(" - ", 1)
+                    ai_artist_fa = ai_artist_en = parts[0].strip()
+                    ai_title_fa = ai_title_en = parts[1].strip()
+
+            # 💾 Unified persistence into the new schema with 5 fields
+            track_id = db.save_full_track(
+                title_fa=ai_title_fa,
+                artist_fa=ai_artist_fa,
                 quality=quality,
                 file_id=file_id,
                 file_size=int(size * 1024 * 1024),
                 source=source,
-                source_url=url
+                source_url=url,
+                title_en=ai_title_en,   # Added
+                artist_en=ai_artist_en, # Added
+                genre=genre_ai
             )
 
-            db.increase_download_count(
-                title=final_title,
-                quality=quality
-            )
-
+            # Remaining steps for recording history and updating statistics...
             if user_id is not None:
                 try:
-                    db.add_user_music_history(
-                        user_id=user_id,
-                        music_id=music_id,
-                        title=final_title,
-                        quality=quality
-                    )
+                    db.add_user_music_history(user_id, final_title, quality, track_id)
                 except Exception as e:
                     print("DB_HISTORY_SAVE_ERROR:", repr(e))
 
-            db.update_source_stats(
-                source=source,
-                download_speed=download_speed,
-                upload_speed=upload_speed,
-                success=True
-            )
+            db.update_source_stats(source, download_speed, upload_speed, True)
 
-            if music_id:
+            if track_id:
                 try:
-                    fingerprint_job = stage_fingerprint_job(
-                        music_id,
-                        file_path,
-                    )
+                    fingerprint_job = stage_fingerprint_job(track_id, file_path)
                 except Exception as e:
                     print("FINGERPRINT_STAGE_ERROR:", repr(e))
 
