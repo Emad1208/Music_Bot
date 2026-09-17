@@ -1,5 +1,6 @@
 import sqlite3
 import datetime
+import json
 
 class Database:
     def __init__(self, db_path):
@@ -56,7 +57,9 @@ class Database:
             cover_url TEXT,
             cover_file_id TEXT,
             total_downloads INTEGER DEFAULT 0,
-            total_dl_tracks INTEGER DEFAULT 0
+            total_dl_tracks INTEGER DEFAULT 0,
+            track_count INTEGER DEFAULT 0,
+            tracks_cache TEXT
         )
         """)
 
@@ -66,20 +69,18 @@ class Database:
         self.cur.execute("""
         CREATE TABLE IF NOT EXISTS tracks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            album_id INTEGER,
             title_fa TEXT,
             title_en TEXT,
             artist_fa TEXT,
             artist_en TEXT,
-            year INTEGER,
             lyrics TEXT,
-            cover_url TEXT,
-            spotify_id TEXT UNIQUE,
-            rj_id TEXT UNIQUE,
+            album_id INTEGER,
+            year TEXT,
+            rj_id TEXT,
             total_downloads INTEGER DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            
-            FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE SET NULL
+            inst_downloads INTEGER DEFAULT 0,
+            vocal_downloads INTEGER DEFAULT 0,
+            FOREIGN KEY (album_id) REFERENCES albums (id)
         )
         """)
 
@@ -670,41 +671,59 @@ class Database:
         title_fa = (title_fa or "").strip()
         artist_fa = (artist_fa or "").strip()
         
-        # 1. Verify track identity
+        # 1. 🚀 Smart search to find an existing stub or prior record
         self.cur.execute("""
-            SELECT id FROM tracks WHERE title_fa = ? AND artist_fa = ?
-        """, (title_fa, artist_fa))
+            SELECT id FROM tracks 
+            WHERE rj_id = ? OR (title_en = ? AND artist_en = ?) OR (title_fa = ? AND artist_fa = ?)
+        """, (str(rj_id), title_en, artist_en, title_fa, artist_fa))
         row = self.cur.fetchone()
         
         if row:
             track_id = row['id']
-            # آپدیت فیلدهای خالی اگر در درخواست جدید ارسال شده باشند
-            if lyrics:
-                self.cur.execute("UPDATE tracks SET lyrics = ? WHERE id = ?", (lyrics, track_id))
-            if year:
-                self.cur.execute("UPDATE tracks SET year = ? WHERE id = ? AND year IS NULL", (year, track_id))
-            if rj_id:
-                self.cur.execute("UPDATE tracks SET rj_id = ? WHERE id = ? AND rj_id IS NULL", (rj_id, track_id))
+            # 🌟 Upgrade stub record: populate empty (NULL) fields with new incoming data
+            self.cur.execute("""
+                UPDATE tracks 
+                SET title_fa = COALESCE(NULLIF(title_fa, ''), ?),
+                    title_en = COALESCE(NULLIF(title_en, ''), ?),
+                    artist_fa = COALESCE(NULLIF(artist_fa, ''), ?),
+                    artist_en = COALESCE(NULLIF(artist_en, ''), ?),
+                    lyrics = COALESCE(NULLIF(lyrics, ''), ?),
+                    year = COALESCE(NULLIF(year, ''), ?),
+                    album_id = COALESCE(album_id, ?),
+                    rj_id = COALESCE(NULLIF(rj_id, ''), ?),
+                    total_downloads = total_downloads + 1
+                WHERE id = ?
+            """, (title_fa, title_en, artist_fa, artist_en, lyrics, year, album_id, str(rj_id), track_id))
         else:
             # Save all fields when creating a new track
             self.cur.execute("""
                 INSERT INTO tracks (title_fa, title_en, artist_fa, artist_en, lyrics, album_id, year, rj_id, total_downloads)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-            """, (title_fa, title_en, artist_fa, artist_en, lyrics, album_id, year, rj_id))
+            """, (title_fa, title_en, artist_fa, artist_en, lyrics, album_id, year, str(rj_id)))
             track_id = self.cur.lastrowid
+            
             # On initial track download, increment the parent album's download count as well
             if album_id:
                 self.cur.execute("UPDATE albums SET total_dl_tracks = total_dl_tracks + 1 WHERE id = ?", (album_id,))
             
         # 2. Persist track audio file
         if file_id:
-            self.cur.execute("""
-                INSERT INTO track_files (track_id, quality, file_id, file_size, source, source_url)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(track_id, quality) DO UPDATE SET 
-                    file_id = excluded.file_id,
-                    file_size = excluded.file_size
-            """, (track_id, quality, file_id, file_size, source, source_url))
+            # Check if a stub was previously created during size caching
+            self.cur.execute("SELECT id FROM track_files WHERE track_id = ? AND quality = ?", (track_id, quality))
+            
+            if self.cur.fetchone():
+                # Populate cached stub with resolved file_id, actual size, and media source metadata
+                self.cur.execute("""
+                    UPDATE track_files 
+                    SET file_id = ?, file_size = ?, source = ?, source_url = ?
+                    WHERE track_id = ? AND quality = ?
+                """, (file_id, file_size, source, source_url, track_id, quality))
+            else:
+                # Insert full record if no prior stub existed
+                self.cur.execute("""
+                    INSERT INTO track_files (track_id, quality, file_id, file_size, source, source_url)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (track_id, quality, file_id, file_size, source, source_url))
             
         # 3. Persist genre
         if genre:
@@ -712,6 +731,12 @@ class Database:
                 INSERT OR IGNORE INTO track_genres (track_id, genre)
                 VALUES (?, ?)
             """, (track_id, genre))
+
+        # 4. Update download count on first download (if track is instrumental or vocal stem)
+        if quality == "inst":
+            self.cur.execute("UPDATE tracks SET inst_downloads = inst_downloads + 1 WHERE id = ?", (track_id,))
+        elif quality == "vocal":
+            self.cur.execute("UPDATE tracks SET vocal_downloads = vocal_downloads + 1 WHERE id = ?", (track_id,))
             
         self.con.commit()
         return track_id
@@ -725,6 +750,7 @@ class Database:
             WHERE (t.title_fa = ? OR t.title_en = ?) 
               AND (t.artist_fa = ? OR t.artist_en = ?) 
               AND tf.quality = ?
+              AND tf.file_id IS NOT NULL   
         """, (title, title, artist, artist, quality))
         
         result = self.cur.fetchone()
@@ -876,6 +902,101 @@ class Database:
         self.cur.execute("UPDATE albums SET cover_file_id = ? WHERE id = ?", (file_id, album_id))
         self.con.commit()
 
+    def update_album_tracks_cache(self, album_id, tracks_list):
+        """Persist the complete track list of an album as a JSON string for instant loading"""
+        track_count = len(tracks_list) if tracks_list else 0
+        cache_json = json.dumps(tracks_list, ensure_ascii=False)
+        self.cur.execute("""
+            UPDATE albums 
+            SET track_count = ?, tracks_cache = ?
+            WHERE id = ?
+        """, (track_count, cache_json, album_id))
+        self.con.commit()
+
+    def get_track_lyrics(self, rj_id, title_en, artist_en):
+        """Search track lyrics in the database by Radio Javan ID or English title/artist"""
+        self.cur.execute("""
+            SELECT lyrics FROM tracks 
+            WHERE rj_id = ? OR (title_en = ? AND artist_en = ?)
+        """, (str(rj_id), title_en, artist_en))
+        row = self.cur.fetchone()
+        return row['lyrics'] if row and row['lyrics'] else None
+
+    def update_track_lyrics(self, rj_id, title_en, artist_en, lyrics):
+        """Persist new track lyrics in the database for subsequent lookups"""
+        self.cur.execute("""
+            UPDATE tracks 
+            SET lyrics = ? 
+            WHERE rj_id = ? OR (title_en = ? AND artist_en = ?)
+        """, (lyrics, str(rj_id), title_en, artist_en))
+        self.con.commit()
+
+    def increase_stem_download_count(self, track_id, stem_type):
+        """Increment download count for specialized stems (without impacting primary track or album metrics)"""
+        if stem_type == "inst":
+            self.cur.execute("UPDATE tracks SET inst_downloads = inst_downloads + 1 WHERE id = ?", (track_id,))
+        elif stem_type == "vocal":
+            self.cur.execute("UPDATE tracks SET vocal_downloads = vocal_downloads + 1 WHERE id = ?", (track_id,))
+        self.con.commit()
+
+    def get_track_file_sizes(self, rj_id, title_en, artist_en):
+        """Retrieve pre-downloaded quality file sizes from the database (returns a dictionary)"""
+        self.cur.execute("""
+            SELECT tf.quality, tf.file_size 
+            FROM track_files tf
+            JOIN tracks t ON tf.track_id = t.id
+            WHERE t.rj_id = ? OR (t.title_en = ? AND t.artist_en = ?)
+        """, (str(rj_id), title_en, artist_en))
+        
+        sizes = {}
+        for row in self.cur.fetchall():
+            quality = row['quality']
+            file_size_bytes = row['file_size']
+            # Convert bytes to megabytes if file size is recorded
+            if file_size_bytes:
+                sizes[quality] = f"{file_size_bytes / (1024 * 1024):.1f} MB"
+        return sizes
+
+    def cache_fetched_sizes(self, rj_id, title_en, artist_en, sizes_dict):
+        """Persist probed file sizes with NULL file_id to prevent redundant HEAD requests"""
+        # 1. Check for existing track or create a stub record
+        self.cur.execute("""
+            SELECT id FROM tracks 
+            WHERE rj_id = ? OR (title_en = ? AND artist_en = ?)
+        """, (str(rj_id), title_en, artist_en))
+        row = self.cur.fetchone()
+        
+        if row:
+            track_id = row['id']
+        else:
+            # Create minimal stub (metadata, genre, and album relation populate upon download)
+            self.cur.execute("""
+                INSERT INTO tracks (rj_id, title_en, artist_en) 
+                VALUES (?, ?, ?)
+            """, (str(rj_id), title_en, artist_en))
+            track_id = self.cur.lastrowid
+
+        # 2. Persist resolved sizes across qualities into track_files
+        for quality, size_str in sizes_dict.items():
+            try:
+                # Parse formatted string (e.g., "7.6 MB") into raw bytes
+                size_mb = float(str(size_str).replace(" MB", "").strip())
+                size_bytes = int(size_mb * 1024 * 1024)
+            except ValueError:
+                continue
+
+            # Insert quality record if not previously registered
+            self.cur.execute("""
+                SELECT id FROM track_files WHERE track_id = ? AND quality = ?
+            """, (track_id, quality))
+            
+            if not self.cur.fetchone():
+                self.cur.execute("""
+                    INSERT INTO track_files (track_id, quality, file_size) 
+                    VALUES (?, ?, ?)
+                """, (track_id, quality, size_bytes))
+                
+        self.con.commit()
 
 
 # ---------------------

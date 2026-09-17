@@ -2,11 +2,13 @@ import asyncio
 import time
 import uuid
 import re
+import json
 from balethon.objects import InlineKeyboard
 from utils.timer import timer
 from .ad_runtime import send_ad_before_music
 from db_Project.db_init import db
 from AI.gemini_genre import get_song_genre
+from db_cache_scrape import search_cache_db
 
 # Import global bot user lock to prevent concurrent downloads across different sources
 from .bot_state import get_user_lock
@@ -94,8 +96,23 @@ async def cleanup_rj_cache():
 # ==========================================
 async def process_rj_search(query, user_id):
     try:
-        async with rj_search_semaphore:
-            songs = await radio_jn.search(query)
+        # 1. Add dedicated prefix to prevent cache key collisions with local music sources
+        rj_query_key = f"rj_search: {query}"
+        
+        # 2. Check database for existing search cache
+        songs = search_cache_db.get_results(rj_query_key)
+        
+        if songs:
+            print(f"RJ_CACHE HIT: {query}")
+        else:
+            # 3. If cache miss, send request to Radio Javan
+            async with rj_search_semaphore:
+                songs = await radio_jn.search(query)
+            
+            # 4. Save to database with a dedicated 24-hour expiration (86400 seconds)
+            if songs:
+                search_cache_db.save_results(rj_query_key, songs, ttl_seconds=86400)
+                print(f"RJ_CACHE SAVED: {query}")
             
         if not songs:
             return None, None
@@ -152,7 +169,20 @@ async def handle_rj_menu_callback(callback_query):
     loading = await callback_query.message.reply("در حال بررسی حجم کیفیت‌ها...")
     
     try:
-        sizes, info = await radio_jn.get_song_sizes(song["id"])
+        # 1. Extract identifiers for database lookup
+        rj_id = str(song["id"])
+        title_en = str(song.get("song") or "").strip()
+        artist_en = str(song.get("artist") or "").strip()
+        
+        # 2. 🚀 Retrieve cached file sizes directly from SQLite
+        cached_sizes = db.get_track_file_sizes(rj_id, title_en, artist_en)
+        
+        # 3. Probe remaining unknown qualities concurrently via Radio Javan
+        sizes, info = await radio_jn.get_song_sizes(song["id"], cached_sizes=cached_sizes)
+        
+        if sizes:
+            db.cache_fetched_sizes(rj_id, title_en, artist_en, sizes)
+
         name = label(song)
         text = f"🎵 کیفیت مورد نظر را انتخاب کنید:\n*{name}*"
         
@@ -163,6 +193,21 @@ async def handle_rj_menu_callback(callback_query):
                 
         if not buttons:
             buttons.append([("📥 دانلود آهنگ", f"rjdl:{search_id}:{index}:default")])
+            
+        # ==========================================
+        # 🌟 Add special stem options (Instrumental and Acapella) with file size
+        # ==========================================
+        stems = song.get("stems")
+        if stems:
+            if stems.get("music"):
+                # Display file size if successfully resolved
+                size_str = f" - {sizes['inst']}" if "inst" in sizes else ""
+                buttons.append([(f"🎹 نسخه بی‌کلام{size_str}", f"rjdl:{search_id}:{index}:inst")])
+                
+            if stems.get("vocals"):
+                # Display file size if successfully resolved
+                size_str = f" - {sizes['vocal']}" if "vocal" in sizes else ""
+                buttons.append([(f"🎤 صدای خالص خواننده{size_str}", f"rjdl:{search_id}:{index}:vocal")])
             
             
         await edit(loading, text, InlineKeyboard(*buttons))
@@ -208,13 +253,30 @@ async def handle_rj_lyrics_callback(callback_query):
         
     song = entry["songs"][index]
     try:
-        info = await radio_jn.details(song["id"])
-        lyric = str(info.get("lyric") or "").strip()
+        # 1. Extract track identifiers for lookup
+        rj_id = str(song["id"])
+        title_en = str(song.get("song", "")).strip()
+        artist_en = str(song.get("artist", "")).strip()
+        
+        # 2. Fast database query (avoids network request to server)
+        lyric = db.get_track_lyrics(rj_id, title_en, artist_en)
+        
+        # 3. If cache miss, fetch from Radio Javan and persist to cache
+        if not lyric:
+            info = await radio_jn.details(song["id"])
+            lyric = str(info.get("lyric") or "").strip()
+            
+            # Persist lyrics to database (if track has previously been downloaded and registered)
+            if lyric:
+                db.update_track_lyrics(rj_id, title_en, artist_en, lyric)
+                
+        # 4. Dispatch final response
         if not lyric:
             lyric = "متن ترانه برای این آهنگ موجود نیست."
             
         await safe_callback_query(callback_query, "متن ترانه آماده شد")
         await callback_query.message.reply(f"📝 متن ترانه: {label(song)}\n\n{lyric}")
+        
     except Exception as error:
         print(f"LYRIC ERROR: {error!r}", flush=True)
         await safe_callback_query(callback_query, "متن ترانه در دسترس نیست")
@@ -231,42 +293,100 @@ async def handle_rj_album_callback(callback_query, bot):
         
     song = entry["songs"][index]
     try:
-        info = await radio_jn.details(song["id"])
-        tracks = radio_jn.album_tracks(info)
+        # 1. Preliminary metadata extraction for cache lookup (no server requests)
+        album_info_basic = song.get("album")
+        if isinstance(album_info_basic, dict):
+            album_name_basic = str(album_info_basic.get("album", "")).strip()
+        else:
+            album_name_basic = str(album_info_basic or "").strip()
+            
+        artist_basic = str(song.get("artist_farsi") or song.get("artist") or "").strip()
         
-        if not tracks:
-            await safe_callback_query(callback_query, "این آهنگ آلبومی ندارد یا سینگل است")
-            await callback_query.message.reply("این آهنگ آلبومی ندارد یا سینگل است")
-            return
+        album_record = None
+        
+        # 2. Query database for existing album record
+        if album_name_basic and album_name_basic != "نامشخص":
+            db.cur.execute("SELECT * FROM albums WHERE title = ? AND artist = ?", (album_name_basic, artist_basic))
+            album_record = db.cur.fetchone()
             
-        album_name = info.get("album")
-        if isinstance(album_name, dict):
-            album_name = album_name.get("album", "نامشخص")
-        if not isinstance(album_name, str) or not album_name:
-            album_name = "نامشخص"
+        if album_record and album_record["tracks_cache"]:
+            # 🚀 Instant dispatch: retrieve directly from cache without hitting Radio Javan API
+            tracks = json.loads(album_record["tracks_cache"])
+            album_id = album_record["id"]
+            album_name = album_record["title"]
+            year = album_record["release_year"] or "نامشخص"
+            photo_path = None  # Cover image is retrieved from platform file cache
+        else:
+            # 🐌 Fetch metadata from Radio Javan API for initial discovery
+            info = await radio_jn.details(song["id"])
+            raw_tracks = radio_jn.album_tracks(info)
             
+            if not raw_tracks:
+                await safe_callback_query(callback_query, "این آهنگ آلبومی ندارد یا سینگل است")
+                await callback_query.message.reply("این آهنگ آلبومی ندارد یا سینگل است")
+                return
+                
+            # 🧹 Smart filter: strip redundant fields and build lightweight cache payload
+            tracks = []
+            for t in raw_tracks:
+                clean_track = {
+                    "id": t.get("id"),
+                    "artist": t.get("artist"),
+                    "song": t.get("song"),
+                    "artist_farsi": t.get("artist_farsi"),
+                    "song_farsi": t.get("song_farsi"),
+                    "link": t.get("link"),
+                    "hq_link": t.get("hq_link"),  # 256/320 quality
+                    "lq_link": t.get("lq_link"),  # 128 quality
+                    "album": t.get("album"),
+                    "stems": {}
+                }
+                
+                # Extract stem URLs (if available)
+                if t.get("stems"):
+                    if t["stems"].get("music"):
+                        clean_track["stems"]["music"] = t["stems"]["music"]
+                    if t["stems"].get("vocals"):
+                        clean_track["stems"]["vocals"] = t["stems"]["vocals"]
+                        
+                tracks.append(clean_track)
+                
+            album_info = info.get("album") or song.get("album")
+            rj_album_id = None
+            if isinstance(album_info, dict):
+                album_name = str(album_info.get("album", "نامشخص")).strip()
+                rj_album_id = album_info.get("id")
+            else:
+                album_name = str(album_info or "نامشخص").strip()
+                
+            year = info.get("date") or str(info.get("created_at", "نامشخص")).split("-")[0]
+            photo_url = info.get("photo")
+            artist_en = str(info.get("artist") or song.get("artist") or "").strip()
+            artist_fa = str(info.get("artist_farsi") or song.get("artist_farsi") or artist_en).strip()
+            
+            # Persist album record and cache tracks list as JSON
+            album_id = db.get_or_create_album(album_name, artist_fa, year if year != "نامشخص" else None, photo_url)
+            if album_id:
+                db.update_album_tracks_cache(album_id, tracks)
+                if rj_album_id:
+                    db.cur.execute("UPDATE albums SET rj_album_id = ? WHERE id = ?", (rj_album_id, album_id))
+                    db.con.commit()
+            
+            # Initial cover download
+            photo_path = None
+            if photo_url:
+                try:
+                    safe_photo_url = f"{radio_jn.WORKER_URL}/proxy?url={photo_url}"
+                    session = await radio_jn.get_session()
+                    async with session.get(safe_photo_url, proxy=radio_jn.PROXY_URL) as resp:
+                        if resp.status == 200:
+                            photo_path = radio_jn.TEMP_DIR / f"cover_{song['id']}_{int(time.time())}.jpg"
+                            with open(photo_path, "wb") as f:
+                                f.write(await resp.read())
+                except Exception as e:
+                    print(f"PHOTO DOWNLOAD ERROR: {e!r}", flush=True)
+
         new_search_id = uuid.uuid4().hex[:10]
-        
-        year = info.get("date")
-        if not year and info.get("created_at"):
-            year = str(info.get("created_at")).split("-")[0]
-        if not year:
-            year = "نامشخص"
-            
-        photo_url = info.get("photo")
-        photo_path = None
-        
-        if photo_url:
-            try:
-                safe_photo_url = f"{radio_jn.WORKER_URL}/proxy?url={photo_url}"
-                session = await radio_jn.get_session()
-                async with session.get(safe_photo_url, proxy=radio_jn.PROXY_URL) as resp:
-                    if resp.status == 200:
-                        photo_path = radio_jn.TEMP_DIR / f"cover_{song['id']}_{int(time.time())}.jpg"
-                        with open(photo_path, "wb") as f:
-                            f.write(await resp.read())
-            except Exception as e:
-                print(f"PHOTO DOWNLOAD ERROR: {e!r}", flush=True)
         
         caption = (
             f"💿 *آهنگ‌های آلبوم* «{album_name}»\n"
@@ -274,7 +394,7 @@ async def handle_rj_album_callback(callback_query, bot):
             f"🔢 *تعداد آهنگ:* {len(tracks)} قطعه"
         )
         
-        # Cache all album tracks along with caption text for subsequent pages
+        # Store in-memory cache for pagination handling
         rj_cache[new_search_id] = {
             "user": user_id, 
             "at": time.time(), 
@@ -282,22 +402,18 @@ async def handle_rj_album_callback(callback_query, bot):
             "text": caption
         }
         
-        # Build first page (containing 5 tracks) from the unbounded album track list
         buttons = build_rj_results_page(new_search_id, tracks, page=0)
-        
         await safe_callback_query(callback_query, "لیست آلبوم آماده شد")
         chat_id = callback_query.message.chat.id
         
-        # Check album cover presence in the database
-        artist_en = str(info.get("artist") or song.get("artist") or "").strip()
-        artist_fa = str(info.get("artist_farsi") or song.get("artist_farsi") or artist_en).strip()
-        album_id = db.get_or_create_album(album_name, artist_fa, year if year != "نامشخص" else None, photo_url)
-        
-        # 📈 Increment album popularity metrics (once after album entity verification)
+        # 📈 Increment album popularity metric
         if album_id:
             db.increase_album_download_count(album_id)
         
-        album_record = db.get_album(album_id) if album_id else None
+        # Re-fetch album record to guarantee cover file_id resolution
+        if not album_record and album_id:
+            album_record = db.get_album(album_id)
+            
         cached_cover_id = album_record['cover_file_id'] if album_record else None
         
         try:
@@ -343,16 +459,23 @@ async def _send_selected_song(callback_query, song, search_id, index, quality, b
     user_id = callback_query.author.id
 
     try:
-        # 1. Fetch basic song information
+        # 1. Fetch basic track information
         info = await radio_jn.details(song["id"])
-        url = info.get("link")
+        stems_info = info.get("stems") or song.get("stems") or {}
+        
+        # Determine download URL based on selected quality/stem
+        if quality == "inst":
+            url = stems_info.get("music")
+        elif quality == "vocal":
+            url = stems_info.get("vocals")
+        else:
+            url = info.get("link")
+            if url and quality != "default":
+                url = re.sub(r'/mp3-\d+/', f'/mp3-{quality}/', url)
         
         if not url:
-            await callback_query.message.reply("لینک دانلود پیدا نشد.")
+            await callback_query.message.reply("لینک دانلود برای این نسخه پیدا نشد.")
             return
-
-        if quality != "default":
-            url = re.sub(r'/mp3-\d+/', f'/mp3-{quality}/', url)
 
         # ==========================================
         # Extract metadata for both scenarios (cache hit and fresh download)
@@ -377,6 +500,15 @@ async def _send_selected_song(callback_query, song, search_id, index, quality, b
         year = info.get("date") or str(info.get("created_at", "نامشخص")).split("-")[0]
         lyric = str(info.get("lyric") or "").strip()
 
+        # ==========================================
+        # 🌟 Define specialized tag for instrumental and vocal stems
+        # ==========================================
+        version_text = ""
+        if quality == "inst":
+            version_text = "🎹 *نسخه*: #بیکلام *Instrumental*\n"
+        elif quality == "vocal":
+            version_text = "🎤 *نسخه*: #صدای_خالص *Vocal*\n"
+
         # Shared keyboard markup
         keyboard = InlineKeyboard(
             [("📝 متن ترانه", f"rjlyrics:{search_id}:{index}")],
@@ -395,7 +527,10 @@ async def _send_selected_song(callback_query, song, search_id, index, quality, b
             genre_db = db.get_track_genre(track_id) if track_id else "Persian Pop"
             
             if track_id:
-                db.increase_track_download_count(track_id)
+                if quality in ["inst", "vocal"]:
+                    db.increase_stem_download_count(track_id, stem_type=quality)
+                else:
+                    db.increase_track_download_count(track_id)
                 db.add_user_music_history(user_id=user_id, title=name, quality=quality, track_id=track_id)
                 
             with timer("SEND_AD_RJ"):
@@ -405,7 +540,8 @@ async def _send_selected_song(callback_query, song, search_id, index, quality, b
                 f"🎧 *آهنگ*: {display_name}\n"
                 f"💿 *آلبوم*: «{album}»\n"
                 f"📅 *سال*: {year}\n"
-                f"🎼 *سبک*: #{genre_db.replace(' ', '_')}\n\n"
+                f"🎼 *سبک*: #{genre_db.replace(' ', '_')}\n"
+                f"{version_text}\n"
                 f"[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
             )
                 
@@ -421,11 +557,11 @@ async def _send_selected_song(callback_query, song, search_id, index, quality, b
         # ==========================================
         # 3. Fresh download (if not present in cache)
         # ==========================================
-        loading = await callback_query.message.reply(f"⏳ در حال دانلود *{name}* ...")
-        
         with timer("SEND_AD_RJ"):
             await send_ad_before_music(bot, chat_id)
-            
+
+        loading = await callback_query.message.reply(f"⏳ در حال دانلود *{name}* ...")
+
         async with rj_download_semaphore:
             path = await radio_jn.download(url, song["id"])
 
@@ -444,7 +580,8 @@ async def _send_selected_song(callback_query, song, search_id, index, quality, b
             f"🎧 *آهنگ*: {display_name}\n"
             f"💿 *آلبوم*: «{album}»\n"
             f"📅 *سال*: {year}\n"
-            f"🎼 *سبک*: #{genre_ai.replace(' ', '_')}\n\n"
+            f"🎼 *سبک*: #{genre_ai.replace(' ', '_')}\n"
+            f"{version_text}\n"
             f"[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
         )
 

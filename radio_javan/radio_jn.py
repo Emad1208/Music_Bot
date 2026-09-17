@@ -172,28 +172,47 @@ async def download(url, song_id, retries=DOWNLOAD_RETRIES):
     raise last_error or RuntimeError("download_failed")
 
 
-async def get_song_sizes(song_id):
+async def get_song_sizes(song_id, cached_sizes=None):
     payload = await details(song_id)
     original_link = payload.get("link")
-    if not original_link:
-        return {}, payload
-
+    
     session = await get_session()
-    results = {}
-    qualities = ["320", "256"]
+    # 🌟 Initialize with database-cached sizes
+    results = cached_sizes.copy() if cached_sizes else {}
+    tasks = []
 
-    async def check_q(q):
-        # تغییر کیفیت در لینک برای بررسی حجم
-        q_url = re.sub(r'/mp3-\d+/', f'/mp3-{q}/', original_link)
+    async def check_url(key, url):
+        # 🚀 Skip external HTTP request if quality size is already cached locally
+        if not url or key in results: 
+            return
         try:
-            async with session.head(q_url, proxy=PROXY_URL) as resp:
+            async with session.head(url, proxy=PROXY_URL, allow_redirects=True) as resp:
                 if resp.status == 200:
                     size = int(resp.headers.get("Content-Length", 0))
                     if size > 0:
-                        results[q] = f"{size / (1024 * 1024):.1f} MB"
+                        results[key] = f"{size / (1024 * 1024):.1f} MB"
         except Exception:
             pass
 
-    # بررسی موازی هر دو کیفیت برای سرعت بالا
-    await asyncio.gather(*(check_q(q) for q in qualities))
+    # Inspect standard audio qualities
+    if original_link:
+        for q in ["320", "256"]:
+            q_url = re.sub(r'/mp3-\d+/', f'/mp3-{q}/', original_link)
+            tasks.append(check_url(q, q_url))
+            
+    # Inspect audio stem URLs (instrumental and acapella)
+    stems = payload.get("stems") or {}
+    if stems.get("music"):
+        tasks.append(check_url("inst", stems.get("music")))
+    if stems.get("vocals"):
+        tasks.append(check_url("vocal", stems.get("vocals")))
+
+    # Concurrently execute remaining uncached probes
+    if tasks:
+        await asyncio.gather(*tasks)
+        
     return results, payload
+
+
+
+
