@@ -1,8 +1,6 @@
-import os
 import json
+import httpx
 from decouple import config
-from google import genai
-from google.genai import types
 
 # 1. Retrieve token
 token = config('AI_GEMINI_TOKEN')
@@ -10,45 +8,46 @@ token = config('AI_GEMINI_TOKEN')
 # Cloudflare worker endpoint
 WORKER_URL = 'https://gemini.eftgxc.workers.dev'
 
-# 2. Inject proxy configuration
+# 2. Local proxy configuration (Isolated for httpx only)
 PROXY_URL = "http://127.0.0.1:10809"
-
-if PROXY_URL:
-    os.environ["HTTP_PROXY"] = PROXY_URL
-    os.environ["HTTPS_PROXY"] = PROXY_URL
-
-# 3. Initialize client
-client = genai.Client(
-    api_key=token,
-    http_options={'base_url': WORKER_URL}
-)
 
 # Converted to async function
 async def get_song_genre(query):
     prompt = f"""
     You are a bilingual music metadata expert.
-    Clean, extract, and translate the metadata for the following messy song query.
+    Clean and extract the metadata for the following messy song query.
+    
+    CRITICAL RULE: For the "_en" keys, DO NOT translate the Persian meaning into English. You MUST provide the Finglish/Pinglish/Romanized version (Persian pronunciation written in English letters). 
+    Example: If the song is "پرنده مهاجر", the title_en MUST be "Parandeh Mohajer", NOT "Migratory Bird".
+    
     Return ONLY a valid JSON object with EXACTLY these 5 keys:
-    - "title_fa": The song title in Persian (Farsi)
-    - "title_en": The song title in English
-    - "artist_fa": The artist name in Persian (Farsi)
-    - "artist_en": The artist name in English
+    - "title_fa": The song title in Persian (Farsi script)
+    - "title_en": The song title in Finglish/Romanized Persian (English letters)
+    - "artist_fa": The artist name in Persian (Farsi script)
+    - "artist_en": The artist name in Finglish/Romanized Persian (English letters)
     - "genre": The primary music genre in English (e.g., Persian Pop, Persian Rap, Traditional, Electronic, etc.)
     
     Messy Query: {query}
     """
     
+    url = f"{WORKER_URL}/v1beta/models/gemini-3.1-flash-lite:generateContent?key={token}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.1, 
+        }
+    }
+    
     try:
-        # Use client.aio for asynchronous requests
-        response = await client.aio.models.generate_content(
-            model='gemini-3.1-flash-lite', 
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1, 
-            )
-        )
-        return json.loads(response.text)
+        # 🚀 Apply proxy exclusively to this request scope
+        async with httpx.AsyncClient(proxy=PROXY_URL, verify=False) as client:
+            response = await client.post(url, json=payload, timeout=15.0)
+            response.raise_for_status()
+            data = response.json()
+            
+            text_response = data['candidates'][0]['content']['parts'][0]['text']
+            return json.loads(text_response)
     except Exception as e:
         print(f"GEMINI API ERROR: {e}")
         return None

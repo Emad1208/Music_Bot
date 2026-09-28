@@ -8,6 +8,7 @@ from db_Project.db_init import db, word_db
 from fprint.queue import stage_fingerprint_job
 from utils.timer import timer
 import time
+from radio_javan import radio_jn
 
 download_semaphore = asyncio.Semaphore(10)
 send_semaphore = asyncio.Semaphore(5)
@@ -199,7 +200,7 @@ async def download_music(url, title, artist, retries=2):
 
 
 
-async def safe_send_audio(bot, chat_id, file_path, title, artist):
+async def safe_send_audio(bot, chat_id, file_path, title, artist, caption=None, reply_markup=None):
     try:
         async with send_semaphore:
             with timer("OPEN_FILE"):
@@ -211,7 +212,8 @@ async def safe_send_audio(bot, chat_id, file_path, title, artist):
                         chat_id,
                         audio=audio_file,
                         title=title,
-                        caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
+                        caption=caption or "\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)",
+                        reply_markup=reply_markup
                     )
                     return send_message
 
@@ -224,7 +226,8 @@ async def safe_send_audio(bot, chat_id, file_path, title, artist):
                     send_message = await bot.send_document(
                         chat_id,
                         audio_file,
-                        caption="\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
+                        caption=caption or "\n[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)",
+                        reply_markup=reply_markup
                     )
                     return send_message
 
@@ -335,41 +338,47 @@ async def send_music(
             return
 
         # =========================
-        # send audio + upload speed
+        # RJ / AI Parser (Metadata extraction before file delivery)
         # =========================
-        upload_start = time.perf_counter()
+        ai_title_fa = title
+        ai_title_en = ""
+        ai_artist_fa = artist or ""
+        ai_artist_en = ""
+        genre_ai = "Persian Pop"
+        lyric = None
+        year = "نامشخص"
+        rj_id_val = None
+        album_name = "نامشخص"
+        cover_url = None
 
-        with timer("SAFE_SEND_AUDIO_TOTAL"):
-            send_message = await safe_send_audio(
-                bot,
-                chat_id,
-                file_path,
-                title,
-                artist
-            )
+        try:
+            rj_results = await radio_jn.search(final_title)
+            if rj_results and len(rj_results) > 0:
+                top_hit = rj_results[0]
+                rj_id_val = str(top_hit.get("id"))
+                
+                ai_title_en = str(top_hit.get("song") or "").strip()
+                ai_artist_en = str(top_hit.get("artist") or "").strip()
+                ai_title_fa = str(top_hit.get("song_farsi") or ai_title_en or title).strip()
+                ai_artist_fa = str(top_hit.get("artist_farsi") or ai_artist_en or artist).strip()
+                
+                info = await radio_jn.details(rj_id_val)
+                lyric = str(info.get("lyric") or "").strip()
+                year = info.get("date") or str(info.get("created_at", "نامشخص")).split("-")[0]
+                cover_url = info.get("photo") or top_hit.get("photo")
+                
+                album_info = info.get("album") or top_hit.get("album")
+                if isinstance(album_info, dict):
+                    album_name = str(album_info.get("album", "نامشخص")).strip()
+                else:
+                    album_name = str(album_info or "نامشخص").strip()
+                    
+                print(f"Metadata smoothly extracted from Radio Javan for {final_title}")
+        except Exception as e:
+            print(f"RJ Metadata Extraction Error: {e}")
 
-        upload_time = time.perf_counter() - upload_start
-        upload_speed = size / upload_time if upload_time else 0
-        print(f"UPLOAD_SPEED: {upload_speed:.2f} MB/s")
-
-        # =========================
-        # AI Parser + Save music + Source stats
-        # =========================
-        with timer("DB_SAVE_FILE_ID"):
-            if send_message is None:
-                return
-            
-            file_id = getattr(send_message.audio, 'file_id', getattr(send_message.audio, 'id', None))
-            
-            word_db.add_confirmed_music_text(final_title, source=source)
-
-            # 🧠 AI: 5-dimensional metadata extraction (Persian, English, and genre)
-            ai_title_fa = title
-            ai_title_en = title
-            ai_artist_fa = artist or ""
-            ai_artist_en = artist or ""
-            genre_ai = "Persian Pop"
-            
+        if not ai_title_en or not ai_artist_en:
+            print(f"RJ missed! Falling back to Gemini for {final_title}")
             try:
                 ai_data = await get_song_genre(final_title)
                 if ai_data:
@@ -380,14 +389,98 @@ async def send_music(
                     genre_ai = str(ai_data.get('genre') or 'Persian Pop').strip()
             except Exception as e:
                 print(f"Gemini AI Extraction Error: {e}")
-                # Fallback in case of network interruption
                 if not artist and " - " in title:
                     parts = title.split(" - ", 1)
                     ai_artist_fa = ai_artist_en = parts[0].strip()
                     ai_title_fa = ai_title_en = parts[1].strip()
 
-            # 💾 Unified persistence into the new schema with 5 fields
-            track_id = db.save_full_track(
+        # 🌟 Construct final rich markdown caption
+        display_name = f"{ai_artist_fa} - {ai_title_fa}" if ai_artist_fa and ai_title_fa else final_title
+        
+        version_text = ""
+        if quality == "inst":
+            version_text = "🎹 *نسخه*: #بیکلام *Instrumental*\n"
+        elif quality == "vocal":
+            version_text = "🎤 *نسخه*: #صدای_خالص *Vocal*\n"
+
+        caption_new = (
+            f"🎧 *آهنگ*: {display_name}\n"
+            f"💿 *آلبوم*: «{album_name}»\n"
+            f"📅 *سال*: {year if year else 'نامشخص'}\n"
+            f"🎼 *سبک*: #{genre_ai.replace(' ', '_')}\n"
+            f"{version_text}"
+            f"[*🎶 بازوی ملودی یار 🎶*](https://ble.ir/melodyar_bot)"
+        )
+
+        # =========================
+        # 🌟 Stage 1: Pre-register track stub in database to obtain track_id before upload
+        # =========================
+        album_id = None
+        if album_name and album_name != "نامشخص":
+            album_id = db.get_or_create_album(
+                title=album_name, 
+                artist=ai_artist_fa, 
+                release_year=year if year != "نامشخص" else None, 
+                cover_url=cover_url
+            )
+
+        track_id = db.save_full_track(
+            title_fa=ai_title_fa,
+            artist_fa=ai_artist_fa,
+            quality=quality,
+            file_id=None,  # Not yet uploaded; file_id remains None initially
+            file_size=int(size * 1024 * 1024),
+            source=source,
+            source_url=url,
+            title_en=ai_title_en,   
+            artist_en=ai_artist_en, 
+            genre=genre_ai,
+            lyrics=lyric if lyric else None,
+            year=year if year != "نامشخص" else None,
+            album_id=album_id,
+            rj_id=rj_id_val
+        )
+
+        # 🌟 Build interactive action buttons using generated track_id
+        keyboard = None
+        if track_id:
+            keyboard = InlineKeyboard(
+                [("📝 متن ترانه", f"dblyrics:{track_id}")],
+                [("🌄 آلبوم آهنگ", f"dbalbum:{track_id}")]
+            )
+
+        # =========================
+        # send audio + upload speed (Deliver audio with inline buttons attached)
+        # =========================
+        upload_start = time.perf_counter()
+
+        with timer("SAFE_SEND_AUDIO_TOTAL"):
+            send_message = await safe_send_audio(
+                bot,
+                chat_id,
+                file_path,
+                display_name,
+                artist,
+                caption=caption_new,
+                reply_markup=keyboard  # 🌟 Attach inline keyboard on initial upload
+            )
+
+        upload_time = time.perf_counter() - upload_start
+        upload_speed = size / upload_time if upload_time else 0
+        print(f"UPLOAD_SPEED: {upload_speed:.2f} MB/s")
+
+        # =========================
+        # 🌟 Stage 2: Finalize database record and link resolved file_id
+        # =========================
+        with timer("DB_SAVE_FILE_ID"):
+            if send_message is None:
+                return
+            
+            file_id = getattr(send_message.audio, 'file_id', getattr(send_message.audio, 'id', None))
+            word_db.add_confirmed_music_text(final_title, source=source)
+
+            # Update existing track record with permanent file_id for subsequent hits
+            db.save_full_track(
                 title_fa=ai_title_fa,
                 artist_fa=ai_artist_fa,
                 quality=quality,
@@ -395,12 +488,15 @@ async def send_music(
                 file_size=int(size * 1024 * 1024),
                 source=source,
                 source_url=url,
-                title_en=ai_title_en,   # Added
-                artist_en=ai_artist_en, # Added
-                genre=genre_ai
+                title_en=ai_title_en,   
+                artist_en=ai_artist_en, 
+                genre=genre_ai,
+                lyrics=lyric if lyric else None,
+                year=year if year != "نامشخص" else None,
+                album_id=album_id,
+                rj_id=rj_id_val
             )
 
-            # Remaining steps for recording history and updating statistics...
             if user_id is not None:
                 try:
                     db.add_user_music_history(user_id, final_title, quality, track_id)
@@ -418,10 +514,7 @@ async def send_music(
             return fingerprint_job
 
     except Exception as e:
-        db.update_source_stats(
-            source=source,
-            success=False
-        )
+        db.update_source_stats(source=source, success=False)
         raise e
 
     finally:
@@ -429,7 +522,6 @@ async def send_music(
             with timer("DELETE_TEMP_FILE"):
                 os.remove(file_path)
             print("File Deleted")
-
 
 
 

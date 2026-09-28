@@ -1,3 +1,3 @@
-from .ai_recommender import build_recommendation_prompt, recommend_queries
+from .ai_recommender import is_recommender_enabled, get_gemini_recommendations
 
-__all__ = ["build_recommendation_prompt", "recommend_queries"]
+__all__ = ["is_recommender_enabled", "get_gemini_recommendations"]

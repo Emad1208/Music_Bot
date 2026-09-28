@@ -45,9 +45,6 @@ class Database:
                 "ALTER TABLE users ADD COLUMN last_activity DATETIME"
             )
 
-        # ==========================================
-        # 1. Albums Table
-        # ==========================================
         self.cur.execute("""
         CREATE TABLE IF NOT EXISTS albums (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,9 +60,6 @@ class Database:
         )
         """)
 
-        # ==========================================
-        # 2. Tracks Identity Table
-        # ==========================================
         self.cur.execute("""
         CREATE TABLE IF NOT EXISTS tracks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,9 +78,6 @@ class Database:
         )
         """)
 
-        # ==========================================
-        # 3. Track Files Table
-        # ==========================================
         self.cur.execute("""
         CREATE TABLE IF NOT EXISTS track_files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,9 +93,6 @@ class Database:
         )
         """)
 
-        # ==========================================
-        # 4. Genres Table for AI
-        # ==========================================
         self.cur.execute("""
         CREATE TABLE IF NOT EXISTS track_genres (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,10 +130,9 @@ class Database:
         name TEXT NOT NULL UNIQUE,
 
         media_type TEXT NOT NULL,       -- text/photo/video/document/audio
-        file_id TEXT,                   -- اگر فقط متن بود NULL
-        caption TEXT,                   -- متن یا کپشن
-        keyboard_json TEXT,             -- دکمه‌ها
-
+        file_id TEXT,                   -- NULL if text-only
+        caption TEXT,                   -- text or caption
+        keyboard_json TEXT,             -- inline buttons
         max_send INTEGER NOT NULL,
         sent_count INTEGER DEFAULT 0,
         is_active INTEGER DEFAULT 1,
@@ -182,7 +169,6 @@ class Database:
         )
         """)
 
-
         self.cur.execute("""
         CREATE TABLE IF NOT EXISTS bot_settings (
             key TEXT PRIMARY KEY,
@@ -217,8 +203,6 @@ class Database:
             WHERE username IS NULL OR username = ''
             """)
 
-
-
         self.cur.execute("""
         CREATE TABLE IF NOT EXISTS source_stats (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -237,46 +221,43 @@ class Database:
         """)
 
         self.cur.execute("""
-            CREATE TABLE IF NOT EXISTS music_fingerprints (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                music_id INTEGER NOT NULL,
-                engine TEXT NOT NULL DEFAULT 'audfprint',
-                engine_version TEXT,
-                track_key TEXT NOT NULL UNIQUE,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        CREATE TABLE IF NOT EXISTS music_fingerprints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            music_id INTEGER NOT NULL,
+            engine TEXT NOT NULL DEFAULT 'audfprint',
+            engine_version TEXT,
+            track_key TEXT NOT NULL UNIQUE,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
-                FOREIGN KEY (music_id)
-                    REFERENCES tracks(id)
-                    ON DELETE CASCADE,
+            FOREIGN KEY (music_id)
+                REFERENCES tracks(id)
+                ON DELETE CASCADE,
 
-                UNIQUE(music_id, engine)
-            )
-            """)
-
-        self.cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_music_fingerprints_track_key
-            ON music_fingerprints(track_key)
-            """)
-
+            UNIQUE(music_id, engine)
+        )
+        """)
 
         self.cur.execute("""
-            CREATE TABLE IF NOT EXISTS user_subscriptions (
-                user_id INTEGER PRIMARY KEY,
-                is_premium INTEGER DEFAULT 0,
-                premium_expiry DATETIME,
-                recommendation_count INTEGER DEFAULT 0,
-                last_recommendation_date DATE,
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            )
-            """)
+        CREATE INDEX IF NOT EXISTS idx_music_fingerprints_track_key
+        ON music_fingerprints(track_key)
+        """)
 
-
+        self.cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_subscriptions (
+            user_id INTEGER PRIMARY KEY,
+            is_premium INTEGER DEFAULT 0,
+            premium_expiry DATETIME,
+            recommendation_count INTEGER DEFAULT 0,
+            last_recommendation_date DATE,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+        """)
         self.con.commit()
 
 # ---------------------
 # Source
 # ---------------------
-    def update_source_stats(self,source, download_speed=None, upload_speed=None, success=True):
+    def update_source_stats(self, source, download_speed=None, upload_speed=None, success=True):
         self.cur.execute("""
             SELECT avg_download_speed, avg_upload_speed, success_count, fail_count
             FROM source_stats
@@ -303,7 +284,7 @@ class Database:
         total = success_count + fail_count
         success_rate = success_count / total if total else 0
 
-        # میانگین نرم
+        # Exponential moving average smoothing
         if download_speed is not None:
             avg_download_speed = download_speed if old_dl == 0 else (old_dl * 0.7 + download_speed * 0.3)
         else:
@@ -335,8 +316,7 @@ class Database:
 
         self.con.commit()
 
-
-    def get_source_stat(self,source):
+    def get_source_stat(self, source):
         self.cur.execute("""
             SELECT avg_download_speed,
                 avg_upload_speed,
@@ -347,10 +327,8 @@ class Database:
             FROM source_stats
             WHERE source = ?
         """, (source,))
-
         return self.cur.fetchone()
     
-
     def get_all_source_stats(self):
         self.cur.execute("""
             SELECT source, avg_download_speed, avg_upload_speed,
@@ -363,181 +341,73 @@ class Database:
 # ---------------------
 # User Funcs
 # ---------------------
-    def add_user(self, user_id, username,
-                 first_name, last_name,
-                 join_date):
-
+    def add_user(self, user_id, username, first_name, last_name, join_date):
         self.cur.execute("""
         INSERT OR IGNORE INTO users
         (user_id, username, first_name, last_name, join_date, last_activity)
         VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            user_id,
-            username,
-            first_name,
-            last_name,
-            join_date,
-            join_date
-        ))
-
+        """, (user_id, username, first_name, last_name, join_date, join_date))
         self.con.commit()
-
 
     def get_user(self, user_id):
-
-        self.cur.execute("""
-        SELECT *
-        FROM users
-        WHERE user_id = ?
-        """, (user_id,))
-
+        self.cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         return self.cur.fetchone()
     
-
     def activate_user(self, user_id):
-        query = """
-        UPDATE users
-        SET is_active = 1,
-            last_activity = CURRENT_TIMESTAMP
-        WHERE user_id = ?
-        """
-
-        self.cur.execute(query, (user_id,))
-        self.con.commit()
-
-
-    def update_user_activity(self, user_id):
         self.cur.execute("""
-        UPDATE users
-        SET last_activity = CURRENT_TIMESTAMP
+        UPDATE users SET is_active = 1, last_activity = CURRENT_TIMESTAMP
         WHERE user_id = ?
         """, (user_id,))
         self.con.commit()
 
-
-    def deactivate_user(self, user_id):
-        query = """
-        UPDATE users
-        SET is_active = 0
-        WHERE user_id = ?
-        """
-
-        self.cur.execute(query, (user_id,))
+    def update_user_activity(self, user_id):
+        self.cur.execute("UPDATE users SET last_activity = CURRENT_TIMESTAMP WHERE user_id = ?", (user_id,))
         self.con.commit()
 
+    def deactivate_user(self, user_id):
+        self.cur.execute("UPDATE users SET is_active = 0 WHERE user_id = ?", (user_id,))
+        self.con.commit()
 
     def get_all_users(self):
-        query = """
-        SELECT user_id
-        FROM users
-        """
-
-        self.cur.execute(query)
+        self.cur.execute("SELECT user_id FROM users")
         return self.cur.fetchall()
-
 
     def get_all_active_users(self):
-        query = """
-        SELECT user_id
-        FROM users
-        WHERE is_active = 1
-        """
-
-        self.cur.execute(query)
+        self.cur.execute("SELECT user_id FROM users WHERE is_active = 1")
         return self.cur.fetchall()
 
-
     def get_users_count(self):
-        query = """
-        SELECT COUNT(*)
-        FROM users
-        """
-
-        self.cur.execute(query)
-
+        self.cur.execute("SELECT COUNT(*) FROM users")
         return self.cur.fetchone()[0]
 
-
     def get_active_users_count(self):
-        query = """
-        SELECT COUNT(*)
-        FROM users
-        WHERE is_active = 1
-        """
-
-        self.cur.execute(query)
-
+        self.cur.execute("SELECT COUNT(*) FROM users WHERE is_active = 1")
         return self.cur.fetchone()[0] 
 
     def check_recommendation_limit(self, user_id, daily_limit=3):
-        """
-        بررسی می‌کند که آیا کاربر مجاز به استفاده از پیشنهادگر هست یا خیر.
-        کاربران پرمیوم محدودیت ندارند.
-        """
         today = datetime.date.today().isoformat()
-        
-        self.cur.execute("""
-            SELECT recommendation_count, last_recommendation_date, is_premium 
-            FROM user_subscriptions 
-            WHERE user_id = ?
-        """, (user_id,))
-        
+        self.cur.execute("SELECT recommendation_count, last_recommendation_date, is_premium FROM user_subscriptions WHERE user_id = ?", (user_id,))
         row = self.cur.fetchone()
         
-        if not row:
-            return True  # رکوردی ندارد، پس مجاز است
-            
+        if not row: return True
         req_count, last_req_date, is_premium = row
-        
-        # اگر کاربر پرمیوم است، همیشه مجاز است
-        if is_premium:
-            return True
-            
-        # اگر تاریخ آخرین درخواست مربوط به امروز نیست، محدودیت صفر شده است
-        if last_req_date != today:
-            return True
-            
-        # بررسی سقف مجاز روزانه
+        if is_premium: return True
+        if last_req_date != today: return True
         return req_count < daily_limit
 
-
     def increment_recommendation_count(self, user_id):
-        """
-        یک واحد به تعداد استفاده روزانه کاربر اضافه می‌کند.
-        """
         today = datetime.date.today().isoformat()
-        
-        self.cur.execute("""
-            SELECT recommendation_count, last_recommendation_date 
-            FROM user_subscriptions 
-            WHERE user_id = ?
-        """, (user_id,))
-        
+        self.cur.execute("SELECT recommendation_count, last_recommendation_date FROM user_subscriptions WHERE user_id = ?", (user_id,))
         row = self.cur.fetchone()
         
         if not row:
-            # ایجاد رکورد جدید برای اولین استفاده
-            self.cur.execute("""
-                INSERT INTO user_subscriptions (user_id, recommendation_count, last_recommendation_date) 
-                VALUES (?, 1, ?)
-            """, (user_id, today))
+            self.cur.execute("INSERT INTO user_subscriptions (user_id, recommendation_count, last_recommendation_date) VALUES (?, 1, ?)", (user_id, today))
         else:
             req_count, last_req_date = row
             if last_req_date != today:
-                # روز جدید است، ریست کردن کانتر
-                self.cur.execute("""
-                    UPDATE user_subscriptions 
-                    SET recommendation_count = 1, last_recommendation_date = ? 
-                    WHERE user_id = ?
-                """, (today, user_id))
+                self.cur.execute("UPDATE user_subscriptions SET recommendation_count = 1, last_recommendation_date = ? WHERE user_id = ?", (today, user_id))
             else:
-                # همان روز است، افزایش کانتر
-                self.cur.execute("""
-                    UPDATE user_subscriptions 
-                    SET recommendation_count = recommendation_count + 1 
-                    WHERE user_id = ?
-                """, (user_id,))
-                
+                self.cur.execute("UPDATE user_subscriptions SET recommendation_count = recommendation_count + 1 WHERE user_id = ?", (user_id,))
         self.con.commit()
 
 # ---------------------
@@ -548,139 +418,68 @@ class Database:
             INSERT OR IGNORE INTO admins (user_id, name, username, role)
             VALUES (?, ?, ?, ?)
         """, (user_id, name, username, role))
-
         self.con.commit()
         return self.cur.lastrowid
 
-
     def is_admin(self, user_id):
-        self.cur.execute("""
-            SELECT 1 FROM admins
-            WHERE user_id = ? AND is_active = 1
-        """, (user_id,))
-
+        self.cur.execute("SELECT 1 FROM admins WHERE user_id = ? AND is_active = 1", (user_id,))
         return self.cur.fetchone() is not None
-
 
     def is_owner(self, user_id):
-        self.cur.execute("""
-            SELECT 1
-            FROM admins
-            WHERE user_id = ?
-            AND role = 'owner'
-            AND is_active = 1
-        """, (user_id,))
-
+        self.cur.execute("SELECT 1 FROM admins WHERE user_id = ? AND role = 'owner' AND is_active = 1", (user_id,))
         return self.cur.fetchone() is not None
 
-
     def get_admins(self):
-        self.cur.execute("""
-            SELECT id,
-                user_id,
-                name,
-                role,
-                is_active,
-                hire_time
-            FROM admins
-            ORDER BY role DESC, id ASC
-        """)
-
+        self.cur.execute("SELECT id, user_id, name, role, is_active, hire_time FROM admins ORDER BY role DESC, id ASC")
         return self.cur.fetchall()
     
-
     def get_admin_by_id(self, admin_id):
-        query = """
-        SELECT
-            id,
-            user_id,
-            name,
-            role,
-            is_active,
-            hire_time
-        FROM admins
-        WHERE id = ?
-        """
-
-        self.cur.execute(query, (admin_id,))
+        self.cur.execute("SELECT id, user_id, name, role, is_active, hire_time FROM admins WHERE id = ?", (admin_id,))
         return self.cur.fetchone() 
 
-
     def delete_admin_by_id(self, admin_id):
-        self.cur.execute(
-            "DELETE FROM admins WHERE id = ? AND role != 'owner'",
-            (admin_id,)
-        )
+        self.cur.execute("DELETE FROM admins WHERE id = ? AND role != 'owner'", (admin_id,))
         self.con.commit()
         return self.cur.rowcount
-
 
     def get_admin_by_user_id(self, user_id):
-        query = """
-        SELECT
-            id,
-            user_id,
-            name,
-            role,
-            is_active,
-            hire_time
-        FROM admins
-        WHERE user_id = ?
-        """
-
-        self.cur.execute(query, (user_id,))
+        self.cur.execute("SELECT id, user_id, name, role, is_active, hire_time FROM admins WHERE user_id = ?", (user_id,))
         return self.cur.fetchone()
 
-
-    def update_admin_status(
-            self,
-            admin_id,
-            status
-                    ):
-        query = """
-        UPDATE admins
-        SET is_active = ?
-        WHERE id = ?
-        """
-
-        self.cur.execute(
-            query,
-            (status, admin_id)
-        )
-
+    def update_admin_status(self, admin_id, status):
+        self.cur.execute("UPDATE admins SET is_active = ? WHERE id = ?", (status, admin_id))
         self.con.commit()
-
         return self.cur.rowcount
 
-
     def get_admins_count(self):
-        query = """
-        SELECT COUNT(*)
-        FROM admins
-        """
-
-        self.cur.execute(query)
-
+        self.cur.execute("SELECT COUNT(*) FROM admins")
         return self.cur.fetchone()[0]
 
 # ---------------------
 # Music Funcs
 # ---------------------
     def save_full_track(self, title_fa, artist_fa, quality, file_id, file_size, source, source_url, title_en=None, artist_en=None, genre=None, lyrics=None, album_id=None, year=None, rj_id=None):
-        """Persist track entity, file details, and genre in the unified database schema"""
         title_fa = (title_fa or "").strip()
         artist_fa = (artist_fa or "").strip()
+        title_en = (title_en or "").strip()
+        artist_en = (artist_en or "").strip()
         
-        # 1. 🚀 Smart search to find an existing stub or prior record
+        if rj_id is None or str(rj_id).strip().lower() == 'none' or str(rj_id).strip() == '':
+            rj_id_val = None
+        else:
+            rj_id_val = str(rj_id).strip()
+        
         self.cur.execute("""
             SELECT id FROM tracks 
-            WHERE rj_id = ? OR (title_en = ? AND artist_en = ?) OR (title_fa = ? AND artist_fa = ?)
-        """, (str(rj_id), title_en, artist_en, title_fa, artist_fa))
+            WHERE 
+                (rj_id IS NOT NULL AND rj_id != 'None' AND rj_id = ?) 
+                OR (title_en != '' AND title_en = ? AND artist_en = ?) 
+                OR (title_fa != '' AND title_fa = ? AND artist_fa = ?)
+        """, (rj_id_val, title_en, artist_en, title_fa, artist_fa))
         row = self.cur.fetchone()
         
         if row:
             track_id = row['id']
-            # 🌟 Upgrade stub record: populate empty (NULL) fields with new incoming data
             self.cur.execute("""
                 UPDATE tracks 
                 SET title_fa = COALESCE(NULLIF(title_fa, ''), ?),
@@ -693,46 +492,38 @@ class Database:
                     rj_id = COALESCE(NULLIF(rj_id, ''), ?),
                     total_downloads = total_downloads + 1
                 WHERE id = ?
-            """, (title_fa, title_en, artist_fa, artist_en, lyrics, year, album_id, str(rj_id), track_id))
+            """, (title_fa, title_en, artist_fa, artist_en, lyrics, year, album_id, rj_id_val, track_id))
         else:
-            # Save all fields when creating a new track
             self.cur.execute("""
                 INSERT INTO tracks (title_fa, title_en, artist_fa, artist_en, lyrics, album_id, year, rj_id, total_downloads)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-            """, (title_fa, title_en, artist_fa, artist_en, lyrics, album_id, year, str(rj_id)))
+            """, (title_fa, title_en, artist_fa, artist_en, lyrics, album_id, year, rj_id_val))
             track_id = self.cur.lastrowid
             
-            # On initial track download, increment the parent album's download count as well
             if album_id:
                 self.cur.execute("UPDATE albums SET total_dl_tracks = total_dl_tracks + 1 WHERE id = ?", (album_id,))
             
-        # 2. Persist track audio file
         if file_id:
-            # Check if a stub was previously created during size caching
             self.cur.execute("SELECT id FROM track_files WHERE track_id = ? AND quality = ?", (track_id, quality))
             
             if self.cur.fetchone():
-                # Populate cached stub with resolved file_id, actual size, and media source metadata
                 self.cur.execute("""
                     UPDATE track_files 
                     SET file_id = ?, file_size = ?, source = ?, source_url = ?
                     WHERE track_id = ? AND quality = ?
                 """, (file_id, file_size, source, source_url, track_id, quality))
             else:
-                # Insert full record if no prior stub existed
                 self.cur.execute("""
                     INSERT INTO track_files (track_id, quality, file_id, file_size, source, source_url)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (track_id, quality, file_id, file_size, source, source_url))
             
-        # 3. Persist genre
         if genre:
             self.cur.execute("""
                 INSERT OR IGNORE INTO track_genres (track_id, genre)
                 VALUES (?, ?)
             """, (track_id, genre))
 
-        # 4. Update download count on first download (if track is instrumental or vocal stem)
         if quality == "inst":
             self.cur.execute("UPDATE tracks SET inst_downloads = inst_downloads + 1 WHERE id = ?", (track_id,))
         elif quality == "vocal":
@@ -741,10 +532,21 @@ class Database:
         self.con.commit()
         return track_id
 
-    def get_track_file_id(self, title, artist, quality):
-        """Quickly retrieve platform file_id via smart bilingual table joins"""
+    # 🌟 Combined lookup retrieving file_id and track_id concurrently
+    def get_track_file_data(self, title, artist, quality, source_url=None, raw_title=None):
+        """Return (file_id, track_id) via exact URL matching, artist/title metadata, or fuzzy matching"""
+        # 1. Direct download URL lookup (fastest and most accurate for scraped sources)
+        if source_url:
+            self.cur.execute("""
+                SELECT file_id, track_id FROM track_files 
+                WHERE source_url = ? AND file_id IS NOT NULL AND quality = ?
+            """, (source_url, quality))
+            result = self.cur.fetchone()
+            if result: return result['file_id'], result['track_id']
+
+        # 2. Exact metadata matching on English or Persian artist/title
         self.cur.execute("""
-            SELECT tf.file_id 
+            SELECT tf.file_id, t.id as track_id
             FROM track_files tf
             JOIN tracks t ON tf.track_id = t.id
             WHERE (t.title_fa = ? OR t.title_en = ?) 
@@ -752,53 +554,54 @@ class Database:
               AND tf.quality = ?
               AND tf.file_id IS NOT NULL   
         """, (title, title, artist, artist, quality))
-        
         result = self.cur.fetchone()
-        return result['file_id'] if result else None
+        if result: return result['file_id'], result['track_id']
+            
+        # 3. Flexible substring search against raw user query
+        if raw_title:
+            like_pattern = f"%{raw_title.replace(' ', '%')}%"
+            self.cur.execute("""
+                SELECT tf.file_id, t.id as track_id
+                FROM track_files tf
+                JOIN tracks t ON tf.track_id = t.id
+                WHERE (
+                    (t.artist_fa || ' ' || t.title_fa) LIKE ? OR 
+                    (t.title_fa || ' ' || t.artist_fa) LIKE ? OR
+                    ? LIKE '%' || t.title_fa || '%'
+                )
+                AND tf.quality = ? AND tf.file_id IS NOT NULL
+                LIMIT 1
+            """, (like_pattern, like_pattern, raw_title, quality))
+            result = self.cur.fetchone()
+            if result: return result['file_id'], result['track_id']
+
+        return None, None
+
+    def get_track_file_id(self, title, artist, quality):
+        """Legacy helper maintained for backward compatibility"""
+        file_id, _ = self.get_track_file_data(title, artist, quality)
+        return file_id
 
     def increase_track_download_count(self, track_id):
-        """Increment track download count + increment album cumulative track downloads"""
-        # 1. Update track download metrics
-        self.cur.execute("""
-            UPDATE tracks SET total_downloads = total_downloads + 1 WHERE id = ?
-        """, (track_id,))
-        
-        # 2. Update album cumulative track downloads (total_dl_tracks)
-        self.cur.execute("""
-            UPDATE albums 
-            SET total_dl_tracks = total_dl_tracks + 1 
-            WHERE id = (SELECT album_id FROM tracks WHERE id = ?)
-        """, (track_id,))
-        
+        self.cur.execute("UPDATE tracks SET total_downloads = total_downloads + 1 WHERE id = ?", (track_id,))
+        self.cur.execute("UPDATE albums SET total_dl_tracks = total_dl_tracks + 1 WHERE id = (SELECT album_id FROM tracks WHERE id = ?)", (track_id,))
         self.con.commit()
 
     def increase_album_download_count(self, album_id):
-        """Increment click count for album request button only"""
-        self.cur.execute("""
-            UPDATE albums SET total_downloads = total_downloads + 1 WHERE id = ?
-        """, (album_id,))
+        self.cur.execute("UPDATE albums SET total_downloads = total_downloads + 1 WHERE id = ?", (album_id,))
         self.con.commit()
 
     def get_track_id(self, title, artist):
-        self.cur.execute("""
-            SELECT id FROM tracks 
-            WHERE (title_fa = ? OR title_en = ?) 
-              AND (artist_fa = ? OR artist_en = ?)
-        """, (title, title, artist, artist))
+        self.cur.execute("SELECT id FROM tracks WHERE (title_fa = ? OR title_en = ?) AND (artist_fa = ? OR artist_en = ?)", (title, title, artist, artist))
         row = self.cur.fetchone()
         return row['id'] if row else None
 
     def add_user_music_history(self, user_id, title, quality=None, track_id=None):
         title = (title or "").strip()
         if not title: return None
-
         try:
-            self.cur.execute("""
-                INSERT INTO user_music_history (user_id, music_id, title, quality)
-                VALUES (?, ?, ?, ?)
-            """, (user_id, track_id, title, quality))
+            self.cur.execute("INSERT INTO user_music_history (user_id, music_id, title, quality) VALUES (?, ?, ?, ?)", (user_id, track_id, title, quality))
             history_id = self.cur.lastrowid
-
             self.cur.execute("UPDATE users SET last_activity = CURRENT_TIMESTAMP WHERE user_id = ?", (user_id,))
             self.con.commit()
             return history_id
@@ -807,12 +610,7 @@ class Database:
             raise
 
     def get_recent_user_music_history(self, user_id, limit=5):
-        self.cur.execute("""
-            SELECT id, user_id, music_id as track_id, title, quality, downloaded_at
-            FROM user_music_history
-            WHERE user_id = ?
-            ORDER BY downloaded_at DESC, id DESC LIMIT ?
-        """, (user_id, limit))
+        self.cur.execute("SELECT id, user_id, music_id as track_id, title, quality, downloaded_at FROM user_music_history WHERE user_id = ? ORDER BY downloaded_at DESC, id DESC LIMIT ?", (user_id, limit))
         return self.cur.fetchall()
 
     def get_musics_count(self):
@@ -824,12 +622,7 @@ class Database:
         return self.cur.fetchone()[0]
 
     def get_weekly_top_musics(self, limit=10):
-        self.cur.execute("""
-            SELECT title, COUNT(*) as weekly_downloads
-            FROM user_music_history
-            WHERE downloaded_at >= datetime('now', '-7 days')
-            GROUP BY title ORDER BY weekly_downloads DESC LIMIT ?
-        """, (limit,))
+        self.cur.execute("SELECT title, COUNT(*) as weekly_downloads FROM user_music_history WHERE downloaded_at >= datetime('now', '-7 days') GROUP BY title ORDER BY weekly_downloads DESC LIMIT ?", (limit,))
         return self.cur.fetchall()
 
     def cleanup_old_history(self, days=30):
@@ -838,7 +631,6 @@ class Database:
         return self.cur.rowcount    
 
     def search_musics_grouped_by_title(self, query, limit=10):
-        """Perform local database search to avoid re-scraping (compatible with new schema)"""
         like_query = f"%{query}%"
         self.cur.execute("""
             SELECT t.title_fa, t.artist_fa, tf.quality, tf.file_id, tf.file_size, tf.source, tf.source_url
@@ -848,27 +640,13 @@ class Database:
             AND tf.file_id IS NOT NULL
             ORDER BY t.total_downloads DESC
         """, (like_query, like_query, like_query, like_query))
-        
         rows = self.cur.fetchall()
         grouped = {}
-        
         for row in rows:
-            # Combine artist and track title for button display
             display_title = f"{row['artist_fa']} - {row['title_fa']}" if row['artist_fa'] else row['title_fa']
-            
             if display_title not in grouped:
-                grouped[display_title] = {
-                    "title": display_title,
-                    "source": row['source'],
-                    "qualities": {}
-                }
-                
-            grouped[display_title]["qualities"][row['quality']] = {
-                "file_id": row['file_id'],
-                "size": round(row['file_size'] / (1024 * 1024), 2) if row['file_size'] else None,
-                "url": row['source_url'],
-            }
-            
+                grouped[display_title] = {"title": display_title, "source": row['source'], "qualities": {}}
+            grouped[display_title]["qualities"][row['quality']] = {"file_id": row['file_id'], "size": round(row['file_size'] / (1024 * 1024), 2) if row['file_size'] else None, "url": row['source_url']}
         return list(grouped.values())[:limit]
 
     def get_track_genre(self, track_id):
@@ -877,20 +655,11 @@ class Database:
         return row['genre'] if row else "Persian Pop"
 
     def get_or_create_album(self, title, artist, release_year=None, cover_url=None):
-        """Register a new album or retrieve the ID of an existing one"""
-        if not title or title == "نامشخص":
-            return None
-            
+        if not title or title == "نامشخص": return None
         self.cur.execute("SELECT id FROM albums WHERE title = ? AND artist = ?", (title, artist))
         row = self.cur.fetchone()
-        
-        if row:
-            return row['id']
-            
-        self.cur.execute("""
-            INSERT INTO albums (title, artist, release_year, cover_url)
-            VALUES (?, ?, ?, ?)
-        """, (title, artist, release_year, cover_url))
+        if row: return row['id']
+        self.cur.execute("INSERT INTO albums (title, artist, release_year, cover_url) VALUES (?, ?, ?, ?)", (title, artist, release_year, cover_url))
         self.con.commit()
         return self.cur.lastrowid
 
@@ -903,105 +672,75 @@ class Database:
         self.con.commit()
 
     def update_album_tracks_cache(self, album_id, tracks_list):
-        """Persist the complete track list of an album as a JSON string for instant loading"""
         track_count = len(tracks_list) if tracks_list else 0
         cache_json = json.dumps(tracks_list, ensure_ascii=False)
-        self.cur.execute("""
-            UPDATE albums 
-            SET track_count = ?, tracks_cache = ?
-            WHERE id = ?
-        """, (track_count, cache_json, album_id))
+        self.cur.execute("UPDATE albums SET track_count = ?, tracks_cache = ? WHERE id = ?", (track_count, cache_json, album_id))
         self.con.commit()
 
     def get_track_lyrics(self, rj_id, title_en, artist_en):
-        """Search track lyrics in the database by Radio Javan ID or English title/artist"""
-        self.cur.execute("""
-            SELECT lyrics FROM tracks 
-            WHERE rj_id = ? OR (title_en = ? AND artist_en = ?)
-        """, (str(rj_id), title_en, artist_en))
+        self.cur.execute("SELECT lyrics FROM tracks WHERE rj_id = ? OR (title_en = ? AND artist_en = ?)", (str(rj_id), title_en, artist_en))
         row = self.cur.fetchone()
         return row['lyrics'] if row and row['lyrics'] else None
 
     def update_track_lyrics(self, rj_id, title_en, artist_en, lyrics):
-        """Persist new track lyrics in the database for subsequent lookups"""
-        self.cur.execute("""
-            UPDATE tracks 
-            SET lyrics = ? 
-            WHERE rj_id = ? OR (title_en = ? AND artist_en = ?)
-        """, (lyrics, str(rj_id), title_en, artist_en))
+        self.cur.execute("UPDATE tracks SET lyrics = ? WHERE rj_id = ? OR (title_en = ? AND artist_en = ?)", (lyrics, str(rj_id), title_en, artist_en))
         self.con.commit()
 
     def increase_stem_download_count(self, track_id, stem_type):
-        """Increment download count for specialized stems (without impacting primary track or album metrics)"""
-        if stem_type == "inst":
-            self.cur.execute("UPDATE tracks SET inst_downloads = inst_downloads + 1 WHERE id = ?", (track_id,))
-        elif stem_type == "vocal":
-            self.cur.execute("UPDATE tracks SET vocal_downloads = vocal_downloads + 1 WHERE id = ?", (track_id,))
+        if stem_type == "inst": self.cur.execute("UPDATE tracks SET inst_downloads = inst_downloads + 1 WHERE id = ?", (track_id,))
+        elif stem_type == "vocal": self.cur.execute("UPDATE tracks SET vocal_downloads = vocal_downloads + 1 WHERE id = ?", (track_id,))
         self.con.commit()
 
     def get_track_file_sizes(self, rj_id, title_en, artist_en):
-        """Retrieve pre-downloaded quality file sizes from the database (returns a dictionary)"""
-        self.cur.execute("""
-            SELECT tf.quality, tf.file_size 
-            FROM track_files tf
-            JOIN tracks t ON tf.track_id = t.id
-            WHERE t.rj_id = ? OR (t.title_en = ? AND t.artist_en = ?)
-        """, (str(rj_id), title_en, artist_en))
-        
+        self.cur.execute("SELECT tf.quality, tf.file_size FROM track_files tf JOIN tracks t ON tf.track_id = t.id WHERE t.rj_id = ? OR (t.title_en = ? AND t.artist_en = ?)", (str(rj_id), title_en, artist_en))
         sizes = {}
         for row in self.cur.fetchall():
             quality = row['quality']
             file_size_bytes = row['file_size']
-            # Convert bytes to megabytes if file size is recorded
-            if file_size_bytes:
-                sizes[quality] = f"{file_size_bytes / (1024 * 1024):.1f} MB"
+            if file_size_bytes: sizes[quality] = f"{file_size_bytes / (1024 * 1024):.1f} MB"
         return sizes
 
     def cache_fetched_sizes(self, rj_id, title_en, artist_en, sizes_dict):
-        """Persist probed file sizes with NULL file_id to prevent redundant HEAD requests"""
-        # 1. Check for existing track or create a stub record
-        self.cur.execute("""
-            SELECT id FROM tracks 
-            WHERE rj_id = ? OR (title_en = ? AND artist_en = ?)
-        """, (str(rj_id), title_en, artist_en))
+        self.cur.execute("SELECT id FROM tracks WHERE rj_id = ? OR (title_en = ? AND artist_en = ?)", (str(rj_id), title_en, artist_en))
         row = self.cur.fetchone()
-        
-        if row:
-            track_id = row['id']
+        if row: track_id = row['id']
         else:
-            # Create minimal stub (metadata, genre, and album relation populate upon download)
-            self.cur.execute("""
-                INSERT INTO tracks (rj_id, title_en, artist_en) 
-                VALUES (?, ?, ?)
-            """, (str(rj_id), title_en, artist_en))
+            self.cur.execute("INSERT INTO tracks (rj_id, title_en, artist_en) VALUES (?, ?, ?)", (str(rj_id), title_en, artist_en))
             track_id = self.cur.lastrowid
-
-        # 2. Persist resolved sizes across qualities into track_files
         for quality, size_str in sizes_dict.items():
             try:
-                # Parse formatted string (e.g., "7.6 MB") into raw bytes
                 size_mb = float(str(size_str).replace(" MB", "").strip())
                 size_bytes = int(size_mb * 1024 * 1024)
-            except ValueError:
-                continue
-
-            # Insert quality record if not previously registered
-            self.cur.execute("""
-                SELECT id FROM track_files WHERE track_id = ? AND quality = ?
-            """, (track_id, quality))
-            
+            except ValueError: continue
+            self.cur.execute("SELECT id FROM track_files WHERE track_id = ? AND quality = ?", (track_id, quality))
             if not self.cur.fetchone():
-                self.cur.execute("""
-                    INSERT INTO track_files (track_id, quality, file_size) 
-                    VALUES (?, ?, ?)
-                """, (track_id, quality, size_bytes))
-                
+                self.cur.execute("INSERT INTO track_files (track_id, quality, file_size) VALUES (?, ?, ?)", (track_id, quality, size_bytes))
         self.con.commit()
 
+    def get_rich_user_music_history(self, user_id, limit=10):
+        self.cur.execute("""
+            SELECT h.title as fallback_title, t.title_fa, t.artist_fa, g.genre
+            FROM user_music_history h
+            LEFT JOIN tracks t ON h.music_id = t.id
+            LEFT JOIN track_genres g ON t.id = g.track_id
+            WHERE h.user_id = ?
+            ORDER BY h.downloaded_at DESC LIMIT ?
+        """, (user_id, limit))
+        return self.cur.fetchall()
+
+    def get_popular_tracks_for_ai(self, limit=150):
+        self.cur.execute("""
+            SELECT t.artist_fa, t.title_fa, g.genre
+            FROM tracks t
+            LEFT JOIN track_genres g ON t.id = g.track_id
+            WHERE t.artist_fa IS NOT NULL AND t.title_fa IS NOT NULL
+            ORDER BY t.total_downloads DESC LIMIT ?
+        """, (limit,))
+        return self.cur.fetchall()
 
 # ---------------------
 # Ads Funcs
-# ---------------------      
+# ---------------------     
     def add_ads(self, ad_data):
         query = """
         INSERT INTO ads (
@@ -1024,7 +763,6 @@ class Database:
         self.con.commit()
         return self.cur.lastrowid
 
-
     def get_ads(self):
         query = """
         SELECT id, name, media_type, max_send, sent_count, is_active
@@ -1034,7 +772,6 @@ class Database:
 
         self.cur.execute(query)
         return self.cur.fetchall()
-
 
     def get_ad_by_id(self, ad_id):
         query = """
@@ -1047,14 +784,12 @@ class Database:
         self.cur.execute(query, (ad_id,))
         return self.cur.fetchone()
 
-
     def get_ad_by_name(self, name):
         self.cur.execute(
             "SELECT * FROM ads WHERE name = ?",
             (name,)
         )
         return self.cur.fetchone()
-
 
     def delete_ad_by_id(self, ad_id):
         self.cur.execute(
@@ -1064,7 +799,6 @@ class Database:
         self.con.commit()
         return self.cur.rowcount
 
-
     def update_ad_max_send(self, ad_id, new_value):
         self.cur.execute(
             "UPDATE ads SET max_send = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -1073,7 +807,6 @@ class Database:
         self.con.commit()
         return self.cur.rowcount
 
-
     def update_ad_active_status(self, ad_id, status):
         self.cur.execute(
             "UPDATE ads SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -1081,7 +814,6 @@ class Database:
         )
         self.con.commit()
         return self.cur.rowcount
-
 
     def get_active_ads(self):
         self.cur.execute("""
@@ -1093,7 +825,6 @@ class Database:
         ORDER BY id
         """)
         return self.cur.fetchall()
-
 
     def increase_ad_sent_count(self, ad_id):
         self.cur.execute("""
@@ -1121,7 +852,6 @@ class Database:
         """, (ad_id,))
         return self.cur.fetchone()
 
-
     def get_next_active_ad(self):
         ads = self.get_active_ads()
 
@@ -1140,7 +870,6 @@ class Database:
 
         return selected_ad
 
-
     def get_ads_count(self):
         query = """
         SELECT COUNT(*)
@@ -1150,7 +879,6 @@ class Database:
         self.cur.execute(query)
 
         return self.cur.fetchone()[0]
-
 
     def get_active_ads_count(self):
         query = """
@@ -1186,9 +914,9 @@ class Database:
             (
                 data["name"],
                 data["media_type"],
-                data["file_id"],
-                data["caption"],
-                data["keyboard_json"],
+                data.get("file_id"),
+                data.get("caption"),
+                data.get("keyboard_json"),
                 1,
                 data["created_by"]
             )
@@ -1197,7 +925,6 @@ class Database:
         self.con.commit()
 
         return self.cur.lastrowid
-
 
     def get_messages(self):
         query = """
@@ -1214,7 +941,6 @@ class Database:
 
         return self.cur.fetchall()
 
-
     def get_message_by_id(self, message_id):
         query = """
         SELECT *
@@ -1226,7 +952,6 @@ class Database:
 
         return self.cur.fetchone() 
 
-
     def delete_message(self, message_id):
         query = """
         DELETE FROM messages
@@ -1237,7 +962,6 @@ class Database:
         self.con.commit()
 
         return self.cur.rowcount
-
 
     def get_messages_count(self):
         query = """
@@ -1268,7 +992,6 @@ class Database:
         self.con.commit()
         return self.cur.lastrowid
 
-
     def get_required_channels(self):
         self.cur.execute("""
         SELECT id, name, username, channel_id, created_by, created_at
@@ -1276,7 +999,6 @@ class Database:
         ORDER BY id DESC
         """)
         return self.cur.fetchall()
-
 
     def get_required_channel_by_id(self, required_channel_id):
         self.cur.execute("""
@@ -1286,7 +1008,6 @@ class Database:
         """, (required_channel_id,))
         return self.cur.fetchone()
 
-
     def delete_required_channel(self, required_channel_id):
         self.cur.execute(
             "DELETE FROM required_channels WHERE id = ?",
@@ -1294,7 +1015,6 @@ class Database:
         )
         self.con.commit()
         return self.cur.rowcount
-
 
     def get_setting(self, key, default=None):
         self.cur.execute(
@@ -1304,14 +1024,12 @@ class Database:
         row = self.cur.fetchone()
         return row[0] if row else default
 
-
     def set_setting(self, key, value):
         self.cur.execute("""
         INSERT OR REPLACE INTO bot_settings (key, value)
         VALUES (?, ?)
         """, (key, str(value)))
         self.con.commit()
-
 
 # ---------------------
 # FingerPrint Funcs
@@ -1352,8 +1070,3 @@ class Database:
 # ---------------------  
     def close(self):
         self.con.close()
-
-
-
-
-

@@ -54,7 +54,9 @@ from .music_handlers import (
     handle_scdl_callback,
     handle_scpage_callback,
     handle_scquality_callback,
-    handle_scrape_callback  
+    handle_scrape_callback,
+    handle_db_album_callback,
+    handle_db_lyrics_callback,
 )
 from .shutdown import (
     install_shutdown_signal_handlers,
@@ -70,6 +72,8 @@ from .radiojavan_handler import (
     handle_rj_album_callback,
     handle_rj_page_callback 
 )
+
+from commands.recommendation import handle_recommend_music_callback, handle_aisearch_callback
 
 token = config('BALE_BOT_TOKEN')
 
@@ -442,6 +446,11 @@ async def answer_callback_query(callback_query):
         await handle_recommend_music_callback(callback_query)
         return
 
+    # 🌟 Route for clicks on Gemini recommendation buttons
+    if data.startswith("aisearch:"):
+        await handle_aisearch_callback(callback_query, bot)
+        return
+
     # Handle weekly top 10 inline buttons
     if data.startswith("weektp:"):
         await handle_weekly_top_callback(callback_query, bot)
@@ -452,7 +461,15 @@ async def answer_callback_query(callback_query):
 
     if data.startswith("scpage:"):
         await handle_scpage_callback(callback_query, bot)
-        
+        return
+
+    # Handle DB Specific Callbacks (Lyrics & Albums)
+    if data.startswith("dblyrics:"):
+        await handle_db_lyrics_callback(callback_query)
+        return
+
+    if data.startswith("dbalbum:"):
+        await handle_db_album_callback(callback_query, bot)
         return
 
     # start menu callbacks
@@ -502,7 +519,7 @@ async def answer_callback_query(callback_query):
             await handler(callback_query)
             return
 
-    await safe_answer_callback(callback_query("unknown command"))
+    await safe_answer_callback(callback_query,"unknown command")
 
 
 def bot_run():

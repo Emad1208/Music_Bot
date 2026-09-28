@@ -14,14 +14,14 @@ from fprint.paths import FINGERPRINT_QUEUE_DIR
 
 MAX_JOB_ATTEMPTS = 2
 JOB_PATTERN = re.compile(
-    r"^music-(?P<music_id>\d+)-(?P<job_id>[0-9a-f]{32})"
+    r"^music-(?P<track_id>\d+)-(?P<job_id>[0-9a-f]{32})"
     r"(?P<suffix>\.[a-z0-9]{1,8})$"
 )
 
 
 @dataclass(frozen=True)
 class FingerprintJob:
-    music_id: int
+    track_id: int
     file_path: Path
     attempts: int = 0
 
@@ -30,11 +30,11 @@ wrapper = AudfprintWrapper()
 
 
 async def save_fingerprint_safely(job: FingerprintJob) -> None:
-    if db.has_music_fingerprint(job.music_id):
+    if db.has_music_fingerprint(job.track_id):
         return
 
     suffix = job.file_path.suffix.lower() or ".mp3"
-    track_key = f"music-{job.music_id}{suffix}"
+    track_key = f"music-{job.track_id}{suffix}"
 
     await asyncio.to_thread(
         wrapper.add_or_create,
@@ -43,8 +43,9 @@ async def save_fingerprint_safely(job: FingerprintJob) -> None:
     )
 
     try:
+        # 🌟 Primary fix: pass correct argument names to database call
         db.save_music_fingerprint(
-            music_id=job.music_id,
+            track_id=job.track_id,
             track_key=track_key,
         )
     except Exception:
@@ -113,7 +114,7 @@ class FingerprintJobQueue:
         self._put_job(job)
         print(
             "FINGERPRINT_QUEUED:",
-            f"music_id={job.music_id}",
+            f"track_id={job.track_id}",
             f"pending={self._queue.qsize()}",
         )
 
@@ -125,7 +126,7 @@ class FingerprintJobQueue:
         self._known_paths.add(normalized_path)
         self._queue.put_nowait(
             FingerprintJob(
-                music_id=job.music_id,
+                track_id=job.track_id,
                 file_path=normalized_path,
                 attempts=job.attempts,
             )
@@ -144,15 +145,15 @@ class FingerprintJobQueue:
             if not match:
                 continue
 
-            music_id = int(match.group("music_id"))
-            if db.has_music_fingerprint(music_id):
+            track_id = int(match.group("track_id"))
+            if db.has_music_fingerprint(track_id):
                 try:
                     file_path.unlink()
                 except OSError as error:
                     print("FINGERPRINT_SPOOL_CLEANUP_ERROR:", repr(error))
                 continue
 
-            jobs.append(FingerprintJob(music_id, file_path))
+            jobs.append(FingerprintJob(track_id, file_path))
 
         return jobs
 
@@ -168,16 +169,16 @@ class FingerprintJobQueue:
             try:
                 print(
                     "FINGERPRINT_JOB_STARTED:",
-                    f"music_id={job.music_id}",
+                    f"track_id={job.track_id}",
                     f"attempt={job.attempts + 1}",
                 )
                 await save_fingerprint_safely(job)
                 succeeded = True
-                print("FINGERPRINT_JOB_DONE:", f"music_id={job.music_id}")
+                print("FINGERPRINT_JOB_DONE:", f"track_id={job.track_id}")
             except Exception as error:
                 print(
                     "FINGERPRINT_JOB_ERROR:",
-                    f"music_id={job.music_id}",
+                    f"track_id={job.track_id}",
                     repr(error),
                 )
                 if job.attempts + 1 < MAX_JOB_ATTEMPTS:
@@ -198,7 +199,7 @@ class FingerprintJobQueue:
             else:
                 print(
                     "FINGERPRINT_JOB_PRESERVED:",
-                    f"music_id={job.music_id}",
+                    f"track_id={job.track_id}",
                     str(job.file_path),
                 )
 
@@ -207,10 +208,10 @@ class FingerprintJobQueue:
 
 
 def stage_fingerprint_job(
-    music_id: int,
+    track_id: int,
     file_path: str | Path,
 ) -> FingerprintJob | None:
-    if db.has_music_fingerprint(music_id):
+    if db.has_music_fingerprint(track_id):
         return None
 
     source_path = Path(file_path).resolve()
@@ -223,10 +224,10 @@ def stage_fingerprint_job(
 
     FINGERPRINT_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     staged_path = FINGERPRINT_QUEUE_DIR / (
-        f"music-{music_id}-{uuid.uuid4().hex}{suffix}"
+        f"music-{track_id}-{uuid.uuid4().hex}{suffix}"
     )
     os.replace(source_path, staged_path)
-    return FingerprintJob(music_id=music_id, file_path=staged_path.resolve())
+    return FingerprintJob(track_id=track_id, file_path=staged_path.resolve())
 
 
 fingerprint_job_queue = FingerprintJobQueue()
